@@ -10,7 +10,8 @@ pip install \
   crccheck==1.3.0 \
   pygame==2.6.1 \
   pyserial==3.5 \
-  pythoncrc==1.21
+  pythoncrc==1.21 \
+  opencv-python
 pip install git+https://github.com/LiamBindle/pyvesc.git
 echo "Sauvegarde dans requirements.txt..."
 pip freeze > requirements.txt
