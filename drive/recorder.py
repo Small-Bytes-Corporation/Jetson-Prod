@@ -1,30 +1,27 @@
-#!/usr/bin/env python3
+# drive/recorder.py
 """
-@file recorder.py
-@brief Record dataset samples (rays + joystick input) using DepthAI camera and a trained mask model.
-Run with: python3 recorder.py <path_to_mask_model.pth>
+Multithreaded dataset recorder using joystick input and segmentation model.
+Run with: python3 drive/recorder.py ai_mask/mask.pth
 """
 
-import sys
 import os
+import sys
 import time
 import csv
 import signal
-from math import sqrt
-
-import cv2
+import threading
+import pygame
 import depthai as dai
 import numpy as np
 import torch
-import torch.nn as nn
+import cv2
+from math import sqrt
+from pyvesc import VESC
 
-# -- Import joystick control from local module --
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), ".")))
-from init_controller import init_joystick, read_inputs, Input
-
-# -- Import U-Net from models --
+# Import U-Net model
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 from models.unet import SimpleUNet
+from drive.init_controller import init_joystick, read_inputs, Input, Axis
 
 # === Constants ===
 CAM_WIDTH, CAM_HEIGHT = 320, 180
@@ -33,28 +30,22 @@ FOV = 180
 MAX_DISTANCE = sqrt(CAM_WIDTH**2 + CAM_HEIGHT**2)
 IMG_NORM_MEAN = [0.485, 0.456, 0.406]
 IMG_NORM_STD = [0.229, 0.224, 0.225]
-
+MAX_SPEED = 0.15
 DELTA_ACC = 0.003
 DELTA_BRAKE = 0.006
-MAX_SPEED = 0.15
 
-# === Control ===
 keep_running = True
+
+# === Signal Handling ===
 def signal_handler(sig, frame):
     global keep_running
     print("\nSignal received. Exiting...")
     keep_running = False
+
 signal.signal(signal.SIGINT, signal_handler)
 signal.signal(signal.SIGTERM, signal_handler)
 
-def compute_target(input_state, max_speed=MAX_SPEED):
-    throttle = (input_state[Input.RT] + 1) / 6
-    brake = (input_state[Input.LT] + 1) / 7
-    clamped_throttle = min(throttle, max_speed)
-    clamped_brake = min(brake, -max_speed)
-    return max(-max_speed, min(max_speed, clamped_throttle - clamped_brake))
-
-# === Raycasting ===
+# === Helper ===
 def perform_raycasting(mask_np: np.ndarray) -> np.ndarray:
     height, width = mask_np.shape
     cx, cy = width // 2, height - 1
@@ -74,16 +65,48 @@ def perform_raycasting(mask_np: np.ndarray) -> np.ndarray:
                 break
     return distances
 
+# === Motor ===
+def init_motor(port='/dev/ttyACM0'):
+    for i in range(5):
+        try:
+            motor = VESC(serial_port=port)
+            print("Connected to VESC.")
+            return motor
+        except Exception as e:
+            print(f"Attempt {i+1}: {e}")
+            time.sleep(1)
+    raise RuntimeError("Failed to init VESC.")
+
+def apply_motor_commands(motor, acc, steer):
+    steer_val = (steer + 1) / 2
+    motor.set_servo(steer_val)
+    motor.set_duty_cycle(acc)
+
+# === Threaded Vision Loop ===
+def vision_loop(shared, lock, device_cam, model, preprocess):
+    q_rgb = device_cam.getOutputQueue("rgb", 4, blocking=False)
+    while keep_running:
+        frame_in = q_rgb.tryGet()
+        if not frame_in:
+            time.sleep(0.005)
+            continue
+        frame = frame_in.getCvFrame()
+        with torch.no_grad():
+            tensor = preprocess(frame)
+            mask = torch.sigmoid(model(tensor)).squeeze().cpu().numpy()
+            binary_mask = (mask > 0.5).astype(np.uint8) * 255
+            rays = perform_raycasting(binary_mask)
+        with lock:
+            shared['rays'] = (rays / MAX_DISTANCE).tolist()
+
 # === Main ===
 def main():
-    if len(sys.argv) != 2 or sys.argv[1] in {"-h", "--help"}:
-        print("Usage: python3 recorder.py <mask_model.pth>")
+    if len(sys.argv) != 2:
+        print("Usage: python3 drive/recorder.py ai_mask/mask.pth")
         sys.exit(1)
 
     model_path = sys.argv[1]
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-
-    # Load segmentation model
     model = SimpleUNet().to(device)
     model.load_state_dict(torch.load(model_path, map_location=device))
     model.eval()
@@ -95,7 +118,6 @@ def main():
             img[i] = (img[i] - IMG_NORM_MEAN[i]) / IMG_NORM_STD[i]
         return img.unsqueeze(0).to(device)
 
-    # DepthAI pipeline setup
     pipeline = dai.Pipeline()
     cam = pipeline.createColorCamera()
     cam.setPreviewSize(CAM_WIDTH, CAM_HEIGHT)
@@ -104,54 +126,55 @@ def main():
     xout.setStreamName("rgb")
     cam.preview.link(xout.input)
 
-    # Initialize joystick
     js = init_joystick()
-    input_state = [0 for _ in range(19)]
-    input_state[Input.LT] = -1
-    input_state[Input.RT] = -1
-    print("Joystick ready:", js.get_name())
-    print("[Start] Hold RB to record. Press BACK+START to exit.")
+    motor = init_motor()
+    print("Joystick + VESC ready. Hold RB to record, BACK+START to quit.")
 
-    # Start camera + logging
+    shared = {'rays': [1.0] * NUM_RAYS}
+    lock = threading.Lock()
+    acceleration = 0.0
+
     with dai.Device(pipeline) as device_cam, open("recorded_drive.csv", "w", newline="") as f:
         writer = csv.writer(f)
-        q_rgb = device_cam.getOutputQueue("rgb", 4, blocking=False)
-        acceleration = 0.0
+        vision_thread = threading.Thread(target=vision_loop, args=(shared, lock, device_cam, model, preprocess))
+        vision_thread.start()
 
         while keep_running:
-            frame_in = q_rgb.tryGet()
-            if not frame_in:
-                time.sleep(0.01)
-                continue
+            pygame.event.pump()
+            steer = js.get_axis(Axis.LEFT_JOY_X)
+            rt = js.get_axis(Axis.RT)
+            lt = js.get_axis(Axis.LT)
+            back = js.get_button(6)
+            start = js.get_button(7)
+            rb = js.get_button(5)
 
-            read_inputs(js, input_state)
-            if input_state[Input.BACK] and input_state[Input.START]:
+            if back and start:
                 print("Exit requested.")
                 break
 
-            frame = frame_in.getCvFrame()
-            with torch.no_grad():
-                tensor = preprocess(frame)
-                mask = torch.sigmoid(model(tensor)).squeeze().cpu().numpy()
-                binary_mask = (mask > 0.5).astype(np.uint8) * 255
-                rays = perform_raycasting(binary_mask)
-                norm_rays = (rays / MAX_DISTANCE).tolist()
+            throttle = (rt + 1) / 6
+            brake = (lt + 1) / 7
+            target = throttle - brake
+            target = max(-MAX_SPEED, min(MAX_SPEED, target))
 
-            target = compute_target(input_state)
             if acceleration < target:
                 acceleration = min(acceleration + DELTA_ACC, target)
             elif acceleration > target:
                 acceleration = max(acceleration - DELTA_BRAKE, target)
 
-            steer = input_state[Input.LEFT_JOY_X]
-            print("Duty: {:.3f} | Steer: {:.3f} | RT: {:.2f} | LT: {:.2f}".format(
-                acceleration, (steer + 1)/2, input_state[Input.RT], input_state[Input.LT]))
+            apply_motor_commands(motor, acceleration, steer)
+            with lock:
+                rays = shared['rays']
 
-            if input_state[Input.RB]:
-                row = [acceleration, steer] + norm_rays
+            print(f"Duty: {acceleration:.3f} | Steer: {(steer + 1) / 2:.3f} | RT: {rt:.2f} | LT: {lt:.2f}")
+
+            if rb:
+                row = [acceleration, steer] + rays
                 writer.writerow(row)
-                print("[REC] Sample saved")
+                print("[REC] Saved sample")
 
+    motor.set_rpm(0)
+    motor.stop_heartbeat()
     print("Shutdown complete.")
 
 if __name__ == "__main__":
