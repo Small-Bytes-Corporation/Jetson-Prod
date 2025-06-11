@@ -7,7 +7,11 @@ Usage: python3 controller.py 0.15
 import sys
 import time
 from pyvesc import VESC
-from drive.joystick_input import init_joystick, read_inputs, Input
+import sys
+import os
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), ".")))
+from init_controller import init_joystick, read_inputs, Input
+
 
 MAX_SPEED = 0.15
 DELTA_ACC = 0.003
