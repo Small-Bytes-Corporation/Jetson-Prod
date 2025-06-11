@@ -11,6 +11,7 @@ import sys
 import os
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), ".")))
 from init_controller import init_joystick, read_inputs, Input
+from enum import IntEnum
 
 
 MAX_SPEED = 0.15
