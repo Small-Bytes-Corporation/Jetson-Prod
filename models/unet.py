@@ -48,10 +48,11 @@ class Up(nn.Module):
 class OutConv(nn.Module):
     def __init__(self, in_c, out_c):
         super().__init__()
-        self.conv = nn.Conv2d(in_c, out_c, 1)
+        self.c = nn.Conv2d(in_c, out_c, 1)
 
     def forward(self, x):
-        return self.conv(x)
+        return self.c(x)
+
 
 class SimpleUNet(nn.Module):
     def __init__(self, n_channels=3, n_classes=1):
