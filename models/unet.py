@@ -1,8 +1,20 @@
+"""
+models/unet.py
+
+Implementation of a simplified U-Net architecture for image segmentation.
+Used to generate a binary mask from an RGB image (e.g., for autonomous driving).
+"""
+
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
+# === DoubleConv ===
 class DoubleConv(nn.Module):
+    """
+    Two consecutive convolutional layers with BatchNorm and ReLU.
+    Structure: Conv2d -> BatchNorm -> ReLU -> Conv2d -> BatchNorm -> ReLU
+    """
     def __init__(self, in_c, out_c, mid_c=None):
         super().__init__()
         if not mid_c:
@@ -19,7 +31,12 @@ class DoubleConv(nn.Module):
     def forward(self, x):
         return self.conv(x)
 
+# === Down ===
 class Down(nn.Module):
+    """
+    Downscaling block: max pooling followed by a DoubleConv.
+    Reduces spatial dimensions while increasing depth.
+    """
     def __init__(self, in_c, out_c):
         super().__init__()
         self.pool_conv = nn.Sequential(
@@ -30,7 +47,13 @@ class Down(nn.Module):
     def forward(self, x):
         return self.pool_conv(x)
 
+# === Up ===
 class Up(nn.Module):
+    """
+    Upscaling block: upsampling followed by concatenation and DoubleConv.
+    Uses bilinear interpolation to increase spatial size.
+    Applies padding to align dimensions if necessary.
+    """
     def __init__(self, in_c, out_c):
         super().__init__()
         self.up = nn.Upsample(scale_factor=2, mode='bilinear', align_corners=True)
@@ -38,14 +61,19 @@ class Up(nn.Module):
 
     def forward(self, x1, x2):
         x1 = self.up(x1)
-        # padding to handle odd dimensions
+        # Pad to match size of x2
         diffY = x2.size(2) - x1.size(2)
         diffX = x2.size(3) - x1.size(3)
         x1 = F.pad(x1, [diffX // 2, diffX - diffX // 2,
                         diffY // 2, diffY - diffY // 2])
         return self.conv(torch.cat([x2, x1], dim=1))
 
+# === OutConv ===
 class OutConv(nn.Module):
+    """
+    Final convolution layer that maps to the output class space.
+    Typically used to output a single-channel mask.
+    """
     def __init__(self, in_c, out_c):
         super().__init__()
         self.c = nn.Conv2d(in_c, out_c, 1)
@@ -53,8 +81,13 @@ class OutConv(nn.Module):
     def forward(self, x):
         return self.c(x)
 
-
+# === SimpleUNet ===
 class SimpleUNet(nn.Module):
+    """
+    Simplified U-Net architecture with 4 down and 4 up blocks.
+    Input: RGB image (3 channels)
+    Output: Segmentation mask (1 channel)
+    """
     def __init__(self, n_channels=3, n_classes=1):
         super().__init__()
         self.inc = DoubleConv(n_channels, 64)
