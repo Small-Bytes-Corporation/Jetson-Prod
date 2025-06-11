@@ -1,14 +1,8 @@
-# models/unet.py
-"""
-U-Net model definition used for segmentation tasks in the Jetson-Prod project.
-This model is imported by training, inference and recording scripts.
-"""
-
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 
 class DoubleConv(nn.Module):
-    """(conv => BN => ReLU) * 2"""
     def __init__(self, in_c, out_c, mid_c=None):
         super().__init__()
         if not mid_c:
@@ -26,7 +20,6 @@ class DoubleConv(nn.Module):
         return self.conv(x)
 
 class Down(nn.Module):
-    """Downscaling with maxpool then double conv"""
     def __init__(self, in_c, out_c):
         super().__init__()
         self.pool_conv = nn.Sequential(
@@ -38,7 +31,6 @@ class Down(nn.Module):
         return self.pool_conv(x)
 
 class Up(nn.Module):
-    """Upscaling then double conv"""
     def __init__(self, in_c, out_c):
         super().__init__()
         self.up = nn.Upsample(scale_factor=2, mode='bilinear', align_corners=True)
@@ -46,47 +38,43 @@ class Up(nn.Module):
 
     def forward(self, x1, x2):
         x1 = self.up(x1)
-        dy = x2.size(2) - x1.size(2)
-        dx = x2.size(3) - x1.size(3)
-        x1 = nn.functional.pad(x1, [dx // 2, dx - dx // 2,
-                                    dy // 2, dy - dy // 2])
+        # padding to handle odd dimensions
+        diffY = x2.size(2) - x1.size(2)
+        diffX = x2.size(3) - x1.size(3)
+        x1 = F.pad(x1, [diffX // 2, diffX - diffX // 2,
+                        diffY // 2, diffY - diffY // 2])
         return self.conv(torch.cat([x2, x1], dim=1))
 
 class OutConv(nn.Module):
     def __init__(self, in_c, out_c):
         super().__init__()
-        self.conv = nn.Conv2d(in_c, out_c, kernel_size=1)
+        self.conv = nn.Conv2d(in_c, out_c, 1)
 
     def forward(self, x):
         return self.conv(x)
 
 class SimpleUNet(nn.Module):
-    """
-    Simple U-Net architecture for binary segmentation.
-    Input: 3-channel RGB image
-    Output: 1-channel mask (logits)
-    """
     def __init__(self, n_channels=3, n_classes=1):
         super().__init__()
         self.inc = DoubleConv(n_channels, 64)
-        self.down1 = Down(64, 128)
-        self.down2 = Down(128, 256)
-        self.down3 = Down(256, 512)
-        self.down4 = Down(512, 512)
-        self.up1 = Up(1024, 256)
-        self.up2 = Up(512, 128)
-        self.up3 = Up(256, 64)
-        self.up4 = Up(128, 64)
+        self.d1 = Down(64, 128)
+        self.d2 = Down(128, 256)
+        self.d3 = Down(256, 512)
+        self.d4 = Down(512, 512)
+        self.u1 = Up(1024, 256)
+        self.u2 = Up(512, 128)
+        self.u3 = Up(256, 64)
+        self.u4 = Up(128, 64)
         self.outc = OutConv(64, n_classes)
 
     def forward(self, x):
         x1 = self.inc(x)
-        x2 = self.down1(x1)
-        x3 = self.down2(x2)
-        x4 = self.down3(x3)
-        x5 = self.down4(x4)
-        x = self.up1(x5, x4)
-        x = self.up2(x, x3)
-        x = self.up3(x, x2)
-        x = self.up4(x, x1)
+        x2 = self.d1(x1)
+        x3 = self.d2(x2)
+        x4 = self.d3(x3)
+        x5 = self.d4(x4)
+        x = self.u1(x5, x4)
+        x = self.u2(x, x3)
+        x = self.u3(x, x2)
+        x = self.u4(x, x1)
         return self.outc(x)
