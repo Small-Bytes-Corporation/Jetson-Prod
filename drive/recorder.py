@@ -15,6 +15,7 @@ from pyvesc import VESC
 
 # Local imports
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
+sys.path.insert(0, os.path.abspath(os.path.dirname(__file__)))
 from models.unet import SimpleUNet
 from drive.init_controller import init_joystick, Axis
 from drive.NR_Agent.data_bufferNR import DataBufferNR
