@@ -18,7 +18,7 @@ NUM_RAYS = 24                     # Number of LiDAR rays
 
 INPUT_SIZE = NUM_RAYS                  # Neural network input size
 MODEL_SAVE_PATH = "model/nr_model.pth" # Model save/load path
-EPOCHS = 300                           # Total number of training epochs
+EPOCHS = 30                          # Total number of training epochs
 LEARNING_RATE = 0.0001                 # Learning rate for the optimizer
 WEIGHT_DECAY = 1e-4                    # L2 penalty for regularization
 BATCH_SIZE = 64                        # Number of samples per batch
