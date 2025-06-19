@@ -14,6 +14,7 @@ import numpy as np
 import torch
 import cv2
 from math import sqrt
+from init_controller import init_joystick, read_inputs, Input
 from pyvesc import VESC
 
 # === Local imports ===
@@ -33,6 +34,9 @@ SERIAL_PORT = '/dev/ttyACM0'
 OUTPUT_LIMIT = 0.05
 
 keep_running = True
+
+js = init_joystick()
+input_state = [0 for _ in range(19)]
 
 def signal_handler(sig, frame):
     global keep_running
@@ -110,6 +114,10 @@ def main():
     with dai.Device(pipeline) as device_cam:
         q_rgb = device_cam.getOutputQueue("rgb", 4, blocking=False)
         while keep_running:
+            read_inputs(js, input_state)
+            if input_state[Input.B] :
+                apply_motor_commands(motor, 0, 0)
+                break
             frame_in = q_rgb.tryGet()
             if not frame_in:
                 time.sleep(0.01)
