@@ -1,15 +1,4 @@
 # drive/recorder.py
-"""
-Multithreaded recorder using joystick input, U-Net segmentation, and raycasting.
-Stores data via DataBufferNR (drive/NR_Agent/data_bufferNR.py).
-
-- Saves [normalized_rays] as state and [acceleration, steering] as values.
-- Uses DepthAI for camera and pyvesc for motor control.
-- Records while RB is held, and saves CSV on exit.
-
-Usage:
-    python3 drive/recorder.py ai_mask/mask.pth
-"""
 
 import os
 import sys
@@ -24,15 +13,15 @@ import cv2
 from math import sqrt
 from pyvesc import VESC
 
-# === Local imports ===
+# Local imports
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 from models.unet import SimpleUNet
-from drive.init_controller import init_joystick, read_inputs, Input, Axis
+from drive.init_controller import init_joystick, Axis
 from drive.NR_Agent.data_bufferNR import DataBufferNR
+from drive.NR_Agent.settings import NUM_RAYS
 
-# === Constants ===
+# Constants
 CAM_WIDTH, CAM_HEIGHT = 320, 180
-NUM_RAYS = 24
 FOV = 180
 MAX_DISTANCE = sqrt(CAM_WIDTH**2 + CAM_HEIGHT**2)
 IMG_NORM_MEAN = [0.485, 0.456, 0.406]
@@ -52,8 +41,8 @@ signal.signal(signal.SIGINT, signal_handler)
 signal.signal(signal.SIGTERM, signal_handler)
 
 def perform_raycasting(mask_np):
-    height, width = mask_np.shape
-    cx, cy = width // 2, height - 1
+    h, w = mask_np.shape
+    cx, cy = w // 2, h - 1
     distances = np.full(NUM_RAYS, MAX_DISTANCE, dtype=np.float32)
     angle_step = FOV / (NUM_RAYS - 1)
     for i in range(NUM_RAYS):
@@ -61,25 +50,29 @@ def perform_raycasting(mask_np):
         dx, dy = np.cos(angle), np.sin(angle)
         x, y = float(cx), float(cy)
         for _ in range(int(MAX_DISTANCE)):
-            x += dx; y += dy
+            x += dx
+            y += dy
             ix, iy = int(x), int(y)
-            if not (0 <= ix < width and 0 <= iy < height): break
+            if not (0 <= ix < w and 0 <= iy < h): break
             if mask_np[iy, ix] > 0:
                 distances[i] = sqrt((ix - cx)**2 + (iy - cy)**2)
                 break
-    return distances
+    return distances.tolist()
 
 def init_motor(port='/dev/ttyACM0'):
     for i in range(5):
         try:
-            return VESC(serial_port=port)
+            motor = VESC(serial_port=port)
+            print("Connected to VESC.")
+            return motor
         except Exception as e:
-            print(f"[VESC] Attempt {i+1} failed: {e}")
+            print(f"[VESC] Attempt {i+1}: {e}")
             time.sleep(1)
-    raise RuntimeError("[VESC] Failed to initialize")
+    raise RuntimeError("Failed to init VESC.")
 
 def apply_motor_commands(motor, acc, steer):
-    motor.set_servo((steer + 1) / 2)
+    steer_val = (steer + 1) / 2
+    motor.set_servo(steer_val)
     motor.set_duty_cycle(acc)
 
 def vision_loop(shared, lock, device_cam, model, preprocess):
@@ -93,10 +86,10 @@ def vision_loop(shared, lock, device_cam, model, preprocess):
         with torch.no_grad():
             tensor = preprocess(frame)
             mask = torch.sigmoid(model(tensor)).squeeze().cpu().numpy()
-            binary = (mask > 0.5).astype(np.uint8)
-            rays = perform_raycasting(binary)
+            binary_mask = (mask > 0.5).astype(np.uint8)
+            rays = perform_raycasting(binary_mask)
         with lock:
-            shared['lidar'] = rays.tolist()
+            shared['lidar'] = rays
 
 def main():
     if len(sys.argv) != 2:
@@ -119,19 +112,20 @@ def main():
     pipeline = dai.Pipeline()
     cam = pipeline.createColorCamera()
     cam.setPreviewSize(CAM_WIDTH, CAM_HEIGHT)
-    cam.setInterleaved(False); cam.setFps(30)
+    cam.setInterleaved(False)
+    cam.setFps(30)
     xout = pipeline.createXLinkOut()
     xout.setStreamName("rgb")
     cam.preview.link(xout.input)
 
     js = init_joystick()
     motor = init_motor()
-    print("[INFO] Joystick + VESC ready. Hold RB to record, BACK+START to quit.")
+    print("Joystick + VESC ready. Hold RB to record, BACK+START to quit.")
 
     shared = {'lidar': [MAX_DISTANCE] * NUM_RAYS}
     lock = threading.Lock()
-    buffer = DataBufferNR()
     acceleration = 0.0
+    data_buffer = DataBufferNR()
 
     with dai.Device(pipeline) as device_cam:
         vision_thread = threading.Thread(target=vision_loop, args=(shared, lock, device_cam, model, preprocess))
@@ -147,7 +141,7 @@ def main():
             rb = js.get_button(5)
 
             if back and start:
-                print("[EXIT] Triggered.")
+                print("Exit requested.")
                 break
 
             throttle = (rt + 1) / 6
@@ -162,17 +156,19 @@ def main():
             apply_motor_commands(motor, acceleration, steer)
 
             with lock:
-                state = {'lidar': shared['lidar'][:NUM_RAYS]}
-            print(f"[INFO] Duty={acceleration:.3f} | Steer={(steer+1)/2:.3f}")
+                rays = shared['lidar']
+
+            print(f"Duty: {acceleration:.3f} | Steer: {(steer + 1)/2:.3f} | RB: {rb}")
 
             if rb:
-                buffer.add_to_buffer(state, [acceleration, steer])
-                print("[REC] Frame recorded")
+                data_map = {'lidar': rays}
+                data_buffer.add_to_buffer(data_map, [acceleration, steer])
+                print("[REC] Added sample")
 
     motor.set_rpm(0)
     motor.stop_heartbeat()
-    buffer.save_data()
-    print("[CLEANUP] Done.")
+    data_buffer.save_data()
+    print("Shutdown complete.")
 
 if __name__ == "__main__":
     main()
