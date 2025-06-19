@@ -8,7 +8,7 @@ import csv
 import json
 import os
 from datetime import datetime
-from settings import NUM_RAYS, DEFAULT_CSV_PATH
+from drive.NR_Agent.settings import NUM_RAYS, DEFAULT_CSV_PATH  #
 
 # **************************************************************************** #
 #                                                                              #
