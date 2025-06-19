@@ -1,16 +1,19 @@
 # drive/recorder.py
-
 """
-Multithreaded dataset recorder using joystick input and segmentation model.
-Captures RGB frames from DepthAI camera, runs mask inference and raycast in parallel,
-logs steering/throttle + ray data in CSV, and saves debug images with ray visualisation.
-Usage: python3 drive/recorder.py ai_mask/mask.pth
+Multithreaded recorder using joystick input, U-Net segmentation, and raycasting.
+Stores data via DataBufferNR (drive/NR_Agent/data_bufferNR.py).
+
+- Saves [normalized_rays] as state and [acceleration, steering] as values.
+- Uses DepthAI for camera and pyvesc for motor control.
+- Records while RB is held, and saves CSV on exit.
+
+Usage:
+    python3 drive/recorder.py ai_mask/mask.pth
 """
 
 import os
 import sys
 import time
-import csv
 import signal
 import threading
 import pygame
@@ -21,11 +24,13 @@ import cv2
 from math import sqrt
 from pyvesc import VESC
 
+# === Local imports ===
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 from models.unet import SimpleUNet
 from drive.init_controller import init_joystick, read_inputs, Input, Axis
+from drive.NR_Agent.data_bufferNR import DataBufferNR
 
-# Constants
+# === Constants ===
 CAM_WIDTH, CAM_HEIGHT = 320, 180
 NUM_RAYS = 24
 FOV = 180
@@ -35,10 +40,8 @@ IMG_NORM_STD = [0.229, 0.224, 0.225]
 MAX_SPEED = 0.15
 DELTA_ACC = 0.003
 DELTA_BRAKE = 0.006
-DEBUG_IMG_DIR = "recorded_debug"
 
 keep_running = True
-os.makedirs(DEBUG_IMG_DIR, exist_ok=True)
 
 def signal_handler(sig, frame):
     global keep_running
@@ -48,7 +51,7 @@ def signal_handler(sig, frame):
 signal.signal(signal.SIGINT, signal_handler)
 signal.signal(signal.SIGTERM, signal_handler)
 
-def perform_raycasting(mask_np, display_frame=None):
+def perform_raycasting(mask_np):
     height, width = mask_np.shape
     cx, cy = width // 2, height - 1
     distances = np.full(NUM_RAYS, MAX_DISTANCE, dtype=np.float32)
@@ -58,53 +61,42 @@ def perform_raycasting(mask_np, display_frame=None):
         dx, dy = np.cos(angle), np.sin(angle)
         x, y = float(cx), float(cy)
         for _ in range(int(MAX_DISTANCE)):
-            x += dx
-            y += dy
+            x += dx; y += dy
             ix, iy = int(x), int(y)
-            if not (0 <= ix < width and 0 <= iy < height):
-                break
+            if not (0 <= ix < width and 0 <= iy < height): break
             if mask_np[iy, ix] > 0:
                 distances[i] = sqrt((ix - cx)**2 + (iy - cy)**2)
-                if display_frame is not None:
-                    cv2.line(display_frame, (cx, cy), (ix, iy), (0, 0, 255), 1)
                 break
     return distances
 
 def init_motor(port='/dev/ttyACM0'):
     for i in range(5):
         try:
-            motor = VESC(serial_port=port)
-            print("Connected to VESC.")
-            return motor
+            return VESC(serial_port=port)
         except Exception as e:
-            print(f"[VESC] Attempt {i+1}: {e}")
+            print(f"[VESC] Attempt {i+1} failed: {e}")
             time.sleep(1)
-    raise RuntimeError("Failed to init VESC.")
+    raise RuntimeError("[VESC] Failed to initialize")
 
 def apply_motor_commands(motor, acc, steer):
-    steer_val = (steer + 1) / 2
-    motor.set_servo(steer_val)
+    motor.set_servo((steer + 1) / 2)
     motor.set_duty_cycle(acc)
 
 def vision_loop(shared, lock, device_cam, model, preprocess):
     q_rgb = device_cam.getOutputQueue("rgb", 4, blocking=False)
-    idx = 0
     while keep_running:
         frame_in = q_rgb.tryGet()
         if not frame_in:
             time.sleep(0.005)
             continue
         frame = frame_in.getCvFrame()
-        vis_frame = frame.copy()
         with torch.no_grad():
             tensor = preprocess(frame)
             mask = torch.sigmoid(model(tensor)).squeeze().cpu().numpy()
-            binary = (mask > 0.5).astype(np.uint8) * 255
-            rays = perform_raycasting(binary, vis_frame)
+            binary = (mask > 0.5).astype(np.uint8)
+            rays = perform_raycasting(binary)
         with lock:
-            shared["rays"] = (rays / MAX_DISTANCE).tolist()
-        cv2.imwrite(f"{DEBUG_IMG_DIR}/frame_{idx:05d}.png", vis_frame)
-        idx += 1
+            shared['lidar'] = rays.tolist()
 
 def main():
     if len(sys.argv) != 2:
@@ -127,22 +119,21 @@ def main():
     pipeline = dai.Pipeline()
     cam = pipeline.createColorCamera()
     cam.setPreviewSize(CAM_WIDTH, CAM_HEIGHT)
-    cam.setInterleaved(False)
-    cam.setFps(30)
+    cam.setInterleaved(False); cam.setFps(30)
     xout = pipeline.createXLinkOut()
     xout.setStreamName("rgb")
     cam.preview.link(xout.input)
 
     js = init_joystick()
     motor = init_motor()
-    print("Joystick + VESC ready. Hold RB to record, BACK+START to quit.")
+    print("[INFO] Joystick + VESC ready. Hold RB to record, BACK+START to quit.")
 
-    shared = {'rays': [1.0] * NUM_RAYS}
+    shared = {'lidar': [MAX_DISTANCE] * NUM_RAYS}
     lock = threading.Lock()
+    buffer = DataBufferNR()
     acceleration = 0.0
 
-    with dai.Device(pipeline) as device_cam, open("recorded_drive.csv", "w", newline="") as f:
-        writer = csv.writer(f)
+    with dai.Device(pipeline) as device_cam:
         vision_thread = threading.Thread(target=vision_loop, args=(shared, lock, device_cam, model, preprocess))
         vision_thread.start()
 
@@ -156,7 +147,7 @@ def main():
             rb = js.get_button(5)
 
             if back and start:
-                print("Exit requested.")
+                print("[EXIT] Triggered.")
                 break
 
             throttle = (rt + 1) / 6
@@ -171,16 +162,17 @@ def main():
             apply_motor_commands(motor, acceleration, steer)
 
             with lock:
-                rays = shared["rays"]
-            print(f"Duty: {acceleration:.3f} | Steer: {(steer + 1) / 2:.3f} | RT: {rt:.2f} | LT: {lt:.2f}")
+                state = {'lidar': shared['lidar'][:NUM_RAYS]}
+            print(f"[INFO] Duty={acceleration:.3f} | Steer={(steer+1)/2:.3f}")
 
             if rb:
-                writer.writerow([acceleration, steer] + rays)
-                print("[REC] Sample recorded")
+                buffer.add_to_buffer(state, [acceleration, steer])
+                print("[REC] Frame recorded")
 
     motor.set_rpm(0)
     motor.stop_heartbeat()
-    print("Shutdown complete.")
+    buffer.save_data()
+    print("[CLEANUP] Done.")
 
 if __name__ == "__main__":
     main()

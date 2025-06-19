@@ -16,6 +16,9 @@ from settings import NUM_RAYS, DEFAULT_CSV_PATH
 #                                                                              #
 # **************************************************************************** #
 
+# data map -> [rayon * NYM_RAYS]
+# value -> [acc, steer]
+
 class DataBufferNR:
     def __init__(self):
         self.buffer = []
