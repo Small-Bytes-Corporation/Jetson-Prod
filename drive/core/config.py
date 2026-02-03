@@ -10,7 +10,7 @@ import os
 MAX_SPEED = 0.15
 DELTA_ACC = 0.003
 DELTA_BRAKE = 0.006
-DEFAULT_SERIAL_PORT = '/dev/ttyACM0'
+DEFAULT_SERIAL_PORT = '/dev/ttyACM1'
 
 # Camera constants
 CAM_WIDTH = 320
@@ -105,7 +105,7 @@ LOOP_SLEEP_TIME = 0.05
 
 # Pan/Tilt constants
 PAN_TILT_BAUDRATE = 115200
-PAN_TILT_SERIAL_PORT = '/dev/ttyACM0'  # Default, can be overridden via CLI
+PAN_TILT_SERIAL_PORT = '/dev/ttyACM2'  # Default, can be overridden via CLI
 PAN_MIN = -1.0  # Minimum pan position
 PAN_MAX = 1.0   # Maximum pan position
 TILT_MIN = -1.0  # Minimum tilt position
