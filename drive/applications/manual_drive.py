@@ -6,6 +6,7 @@ import os
 # Set dummy video driver for headless systems (must be BEFORE pygame import)
 os.environ["SDL_VIDEODRIVER"] = "dummy"
 
+import sys
 import time
 import signal
 import pygame
@@ -217,27 +218,36 @@ class ManualDriveApp:
                 if self.use_motor and self.motor is not None:
                     self.motor.set_commands(acceleration, steering)
                 
-                # Process pan/tilt control (like control.py: D-pad or analog stick axes 3 and 4)
+                # Process pan/tilt control with D-pad (flèches du contrôleur)
                 if self.use_pan_tilt and self.pantilt is not None and self.use_joystick and self.joystick is not None:
-                    pan_value = 0.0
-                    tilt_value = 0.0
-                    
                     # Read D-pad/hat values (flèches du contrôleur)
                     hat_x = self.joystick.get_axis(Input.HAT_X)  # Left (-1) / Right (1)
                     hat_y = self.joystick.get_axis(Input.HAT_Y)  # Down (-1) / Up (1)
                     
-                    # Si le D-pad est utilisé, convertir en valeurs analogiques
-                    if hat_x != 0 or hat_y != 0:
-                        # Convertir D-pad (-1, 0, 1) en valeurs analogiques comme un stick
-                        pan_value = float(hat_x)  # -1.0, 0.0, ou 1.0
-                        tilt_value = float(hat_y)  # -1.0, 0.0, ou 1.0
-                    else:
-                        # Sinon utiliser analog stick right (axes 3 and 4) like control.py
-                        pan_value = self.joystick.get_axis(Axis.RIGHT_JOY_X)  # Axis 3
-                        tilt_value = self.joystick.get_axis(Axis.RIGHT_JOY_Y)  # Axis 4
+                    # Convertir les valeurs du D-pad en deltas pour update() (accumulation continue)
+                    pan_delta = hat_x  # Left = -1, Right = +1
+                    tilt_delta = hat_y  # Down = -1, Up = +1
                     
-                    # Send analog position (like control.py) - always send, even if 0
-                    self.pantilt.set_analog_position(pan_value, tilt_value)
+                    # Update pan/tilt avec accumulation continue (ne se réinitialise pas)
+                    self.pantilt.update(pan_delta, tilt_delta)
+                    
+                    # Debug: déterminer quelle flèche est appuyée
+                    arrow = "NONE"
+                    if hat_x == -1:
+                        arrow = "LEFT"
+                    elif hat_x == 1:
+                        arrow = "RIGHT"
+                    elif hat_y == 1:
+                        arrow = "UP"
+                    elif hat_y == -1:
+                        arrow = "DOWN"
+                    
+                    # Récupérer l'état actuel de x et y
+                    pan_pos, tilt_pos = self.pantilt.get_position()
+                    
+                    # Print debug avec état des flèches et positions
+                    sys.stdout.write(f"\rD-pad: {arrow:4s} | hat_x: {hat_x:+2.0f} | hat_y: {hat_y:+2.0f} | Pan(X): {pan_pos:+.2f} | Tilt(Y): {tilt_pos:+.2f}   ")
+                    sys.stdout.flush()
                 
                 # Process camera if enabled
                 if self.use_camera and self.camera is not None:
