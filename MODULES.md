@@ -16,6 +16,7 @@ Le système Robocar est composé de plusieurs modules modulaires qui peuvent êt
 | Camera | `use_camera` | `False` | Contrôleur | Capture de frames caméra DepthAI |
 | Lidar | `use_lidar` | Auto | Contrôleur | Acquisition de données lidar |
 | PanTilt | `use_pan_tilt` | `True` | Contrôleur | Contrôle pan/tilt de la caméra |
+| RTK | `use_rtk` | `False` | Contrôleur | Stream RTK GNSS (pose + IMU accel/gyro) |
 | Socket | `enable_socket` | `False` | Service | Serveur Socket.io pour streaming |
 
 ## Description détaillée des modules
@@ -207,6 +208,38 @@ python3 main.py --pan-tilt-port /dev/ttyACM1
 
 # Désactiver pan/tilt
 python3 main.py --no-pan-tilt
+```
+
+---
+
+### RTKController
+
+**Fichier**: `drive/core/rtk_controller.py`
+
+**Description**:
+Lit le flux Fusion Engine sur le port série de la balise Point One (Quectel LG69T) et expose en stream la dernière **pose** (position GNSS, type de solution, vitesse, ypr) et la dernière **IMU** (accéléromètre axes x,y,z en m/s², gyroscope x,y,z en rad/s). L’IMU n’est émise qu’avec le firmware SDK-AP (GNSS+IMU) ; avec SDK-AM (GNSS seul), `get_latest_imu()` restera `None`.
+
+**Flag**: `use_rtk` (éventuel, non intégré au `main.py` pour l’instant)
+
+**Port série**: Configuré via `config.py` (`DEFAULT_RTK_SERIAL_PORT`, `RTK_BAUDRATE`) ou en argument du constructeur.
+
+**Données exposées**:
+- `get_latest_pose()` : dict avec `lla_deg`, `solution_type`, `position_std_enu_m`, `gps_time`, `p1_time`, optionnel `ypr_deg`, `velocity_body_mps`.
+- `get_latest_imu()` : dict avec `accel_xyz`, `gyro_xyz` ; `None` si aucun message IMU reçu.
+
+**Dépendances**:
+- `fusion-engine-client` (pip), `pyserial`
+
+**Exemple d’utilisation**:
+```bash
+# Test du module RTK seul (depuis la racine du projet)
+python scripts/test_rtk.py
+
+# Test avec port série spécifique
+python scripts/test_rtk.py --port /dev/ttyUSB0
+
+# Fréquence d’affichage (Hz)
+python scripts/test_rtk.py --port /dev/ttyUSB0 --hz 5
 ```
 
 ---
