@@ -2,6 +2,10 @@
 Joystick controller for gamepad input handling.
 """
 
+import os
+# Set dummy video driver for headless systems (must be BEFORE pygame import)
+os.environ["SDL_VIDEODRIVER"] = "dummy"
+
 import pygame
 from enum import IntEnum
 
@@ -101,31 +105,27 @@ class JoystickController:
         if not self._initialized:
             return
         
-        for event in pygame.event.get():
-            if event.type == pygame.QUIT:
-                raise KeyboardInterrupt()
-            
-            # Button state (pressed or released)
-            if event.type in [pygame.JOYBUTTONDOWN, pygame.JOYBUTTONUP]:
-                for i in range(11):
-                    if i < self.js.get_numbuttons():
-                        self.input_state[i] = self.js.get_button(i)
-            
-            # Axis motion (analog values)
-            if event.type == pygame.JOYAXISMOTION:
-                self.input_state[Input.LEFT_JOY_X] = self._safe_get_axis(Axis.LEFT_JOY_X)
-                self.input_state[Input.LEFT_JOY_Y] = self._safe_get_axis(Axis.LEFT_JOY_Y)
-                self.input_state[Input.RIGHT_JOY_X] = self._safe_get_axis(Axis.RIGHT_JOY_X)
-                self.input_state[Input.RIGHT_JOY_Y] = self._safe_get_axis(Axis.RIGHT_JOY_Y)
-                self.input_state[Input.LT] = self._safe_get_axis(Axis.LT, -1)
-                self.input_state[Input.RT] = self._safe_get_axis(Axis.RT, -1)
-            
-            # D-pad / hat switch
-            if event.type == pygame.JOYHATMOTION:
-                if self.js.get_numhats() > 0:
-                    hat_x, hat_y = self.js.get_hat(0)
-                    self.input_state[Input.HAT_X] = hat_x
-                    self.input_state[Input.HAT_Y] = hat_y
+        # Pump events to update joystick state (works with dummy video driver)
+        pygame.event.pump()
+        
+        # Read button states directly
+        for i in range(11):
+            if i < self.js.get_numbuttons():
+                self.input_state[i] = self.js.get_button(i)
+        
+        # Read axis values directly (more reliable than event-based)
+        self.input_state[Input.LEFT_JOY_X] = self._safe_get_axis(Axis.LEFT_JOY_X)
+        self.input_state[Input.LEFT_JOY_Y] = self._safe_get_axis(Axis.LEFT_JOY_Y)
+        self.input_state[Input.RIGHT_JOY_X] = self._safe_get_axis(Axis.RIGHT_JOY_X)
+        self.input_state[Input.RIGHT_JOY_Y] = self._safe_get_axis(Axis.RIGHT_JOY_Y)
+        self.input_state[Input.LT] = self._safe_get_axis(Axis.LT, -1)
+        self.input_state[Input.RT] = self._safe_get_axis(Axis.RT, -1)
+        
+        # Read D-pad / hat switch directly
+        if self.js.get_numhats() > 0:
+            hat_x, hat_y = self.js.get_hat(0)
+            self.input_state[Input.HAT_X] = hat_x
+            self.input_state[Input.HAT_Y] = hat_y
     
     def get_axis(self, axis):
         """
