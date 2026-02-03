@@ -13,25 +13,16 @@ from .config import (
 
 class PanTiltController:
     """
-    Controller for pan/tilt camera mount with discrete movement and position limits.
+    Controller for pan/tilt camera mount.
+    PAN (X) is controlled by SPEED (Continuous Rotation Servo).
+    TILT (Y) is controlled by POSITION (Standard Servo).
     """
     
     def __init__(self, serial_port=PAN_TILT_SERIAL_PORT, enabled=True,
                  pan_min=PAN_MIN, pan_max=PAN_MAX,
                  tilt_min=TILT_MIN, tilt_max=TILT_MAX,
                  step_size=PAN_TILT_STEP_SIZE):
-        """
-        Initialize the pan/tilt controller.
         
-        Args:
-            serial_port: Path to serial port for Arduino communication.
-            enabled: If False, controller is disabled (mock mode).
-            pan_min: Minimum pan position (default: -1.0).
-            pan_max: Maximum pan position (default: 1.0).
-            tilt_min: Minimum tilt position (default: -1.0).
-            tilt_max: Maximum tilt position (default: 1.0).
-            step_size: Step size for discrete movement (default: 0.05).
-        """
         self.serial_port = serial_port
         self.enabled = enabled
         self.pan_min = pan_min
@@ -41,20 +32,20 @@ class PanTiltController:
         self.step_size = step_size
         
         self.serial_conn = None
-        self.pan_position = 0.0
-        self.tilt_position = 0.0
+        
+        # State variables
+        self.current_pan_speed = 0.0   # Vitesse actuelle du Pan (-1 à 1)
+        self.current_tilt_pos = 0.0    # Position actuelle du Tilt (-1 à 1)
+        
         self._initialized = False
         
-        # Rate limiting for serial communication
+        # Rate limiting
         self.next_send = 0.0
         self.send_interval = 1.0 / PAN_TILT_SEND_HZ
     
     def initialize(self):
         """
-        Initialize serial connection and reset pan/tilt to center position.
-        
-        Raises:
-            RuntimeError: If serial connection fails.
+        Initialize serial connection and stop motors.
         """
         if not self.enabled:
             print("[PanTilt] Controller disabled (mock mode)")
@@ -73,115 +64,117 @@ class PanTiltController:
             # Wait for Arduino reboot
             time.sleep(2)
             
-            # Reset to center position (0, 0)
-            print("[PanTilt] Resetting camera position to center...")
+            # Reset: Pan STOP (0 speed), Tilt HORIZON (0 position)
+            print("[PanTilt] Resetting camera to center/stop...")
             for _ in range(5):
-                self._send_position(0.0, 0.0)
+                self._send_command(0.0, 0.0)
                 time.sleep(0.05)
             
-            self.pan_position = 0.0
-            self.tilt_position = 0.0
+            self.current_pan_speed = 0.0
+            self.current_tilt_pos = 0.0
             self._initialized = True
-            print("[PanTilt] Initialized and reset to center position")
+            print("[PanTilt] Initialized.")
             
         except Exception as e:
             raise RuntimeError(f"Failed to initialize pan/tilt controller: {e}")
     
-    def _send_position(self, pan, tilt):
+    def _send_command(self, pan_speed, tilt_pos):
         """
-        Send pan/tilt position to Arduino via serial.
-        
+        Send command to Arduino.
         Args:
-            pan: Pan position value.
-            tilt: Tilt position value.
+            pan_speed: Speed for continuous servo (-1.0 to 1.0).
+            tilt_pos: Angle for positional servo (-1.0 to 1.0).
         """
         if not self.enabled or self.serial_conn is None:
             return
         
         try:
-            msg = f"{pan:.2f},{tilt:.2f}\n".encode('ascii')
+            # Format: "PAN_SPEED,TILT_POS\n"
+            msg = f"{pan_speed:.2f},{tilt_pos:.2f}\n".encode('ascii')
             self.serial_conn.write(msg)
-            # Clear any pending input
+            
+            # Clear input buffer to avoid lag
             if self.serial_conn.in_waiting:
                 self.serial_conn.read(self.serial_conn.in_waiting)
         except Exception as e:
-            print(f"[PanTilt] Error sending position: {e}")
+            print(f"[PanTilt] Error sending command: {e}")
     
     def update(self, pan_delta, tilt_delta):
         """
-        Update pan/tilt position with discrete deltas, applying limits.
+        Update with discrete steps (Arrow keys).
         
         Args:
-            pan_delta: Change in pan position (will be multiplied by step_size).
-            tilt_delta: Change in tilt position (will be multiplied by step_size).
+            pan_delta: Change in Pan SPEED.
+            tilt_delta: Change in Tilt POSITION.
         """
         if not self._initialized:
             return
         
-        # Apply step size to deltas
+        # Apply step size
         pan_change = pan_delta * self.step_size
         tilt_change = tilt_delta * self.step_size
         
-        # Calculate new positions
-        new_pan = self.pan_position + pan_change
-        new_tilt = self.tilt_position + tilt_change
+        # Update State
+        # Pour le Pan, les flèches augmentent/diminuent la vitesse de rotation
+        self.current_pan_speed += pan_change
+        # Pour le Tilt, les flèches changent l'angle de vue
+        self.current_tilt_pos += tilt_change
         
         # Apply limits
-        new_pan = max(self.pan_min, min(self.pan_max, new_pan))
-        new_tilt = max(self.tilt_min, min(self.tilt_max, new_tilt))
+        self.current_pan_speed = max(self.pan_min, min(self.pan_max, self.current_pan_speed))
+        self.current_tilt_pos = max(self.tilt_min, min(self.tilt_max, self.current_tilt_pos))
         
-        # Only send if position changed or rate limit allows
+        # Send update if rate limit allows
         now = time.monotonic()
-        if (new_pan != self.pan_position or new_tilt != self.tilt_position) and now >= self.next_send:
-            self.pan_position = new_pan
-            self.tilt_position = new_tilt
-            self._send_position(self.pan_position, self.tilt_position)
+        if now >= self.next_send:
+            self._send_command(self.current_pan_speed, self.current_tilt_pos)
             self.next_send = now + self.send_interval
     
-    def set_analog_position(self, pan_value, tilt_value):
+    def set_analog_position(self, pan_axis, tilt_axis):
         """
-        Set pan/tilt position directly from analog stick values (like control.py).
-        Applies deadzone and sends values directly to Arduino.
+        Set directly from Joystick.
         
         Args:
-            pan_value: Raw pan axis value (-1.0 to 1.0).
-            tilt_value: Raw tilt axis value (-1.0 to 1.0).
+            pan_axis: Joystick X value (-1 to 1). Maps to SPEED.
+            tilt_axis: Joystick Y value (-1 to 1). Maps to POSITION.
         """
         if not self._initialized:
             return
         
-        # Apply deadzone (like control.py)
-        pan = 0.0 if abs(pan_value) < PAN_TILT_DEADZONE else pan_value
-        tilt = 0.0 if abs(tilt_value) < PAN_TILT_DEADZONE else tilt_value
+        # Apply deadzone
+        pan = 0.0 if abs(pan_axis) < PAN_TILT_DEADZONE else pan_axis
+        tilt = 0.0 if abs(tilt_axis) < PAN_TILT_DEADZONE else tilt_axis
         
-        # Apply limits
+        # Limits
         pan = max(self.pan_min, min(self.pan_max, pan))
         tilt = max(self.tilt_min, min(self.tilt_max, tilt))
         
-        # Send at the configured frequency (like control.py) - always send, even if 0
+        # Update internal state so get_position() is accurate
+        self.current_pan_speed = pan
+        self.current_tilt_pos = tilt
+        
+        # Always send (to ensure smooth movement and immediate stop)
         now = time.monotonic()
         if now >= self.next_send:
-            self.pan_position = pan
-            self.tilt_position = tilt
-            self._send_position(self.pan_position, self.tilt_position)
+            self._send_command(self.current_pan_speed, self.current_tilt_pos)
             self.next_send = now + self.send_interval
     
     def get_position(self):
         """
-        Get current pan/tilt position.
-        
-        Returns:
-            tuple: (pan, tilt) current position.
+        Returns (current_pan_speed, current_tilt_position).
         """
-        return (self.pan_position, self.tilt_position)
+        return (self.current_pan_speed, self.current_tilt_pos)
     
     def stop(self):
-        """Stop the controller and close serial connection."""
+        """Stop motors and close connection."""
         if not self.enabled:
             return
         
         if self.serial_conn is not None:
             try:
+                # Force Stop command before closing
+                self.serial_conn.write(b"0.00,0.00\n")
+                time.sleep(0.1)
                 self.serial_conn.close()
                 print("[PanTilt] Serial connection closed")
             except Exception as e:
@@ -191,10 +184,8 @@ class PanTiltController:
                 self.serial_conn = None
     
     def __enter__(self):
-        """Context manager entry."""
         self.initialize()
         return self
     
     def __exit__(self, exc_type, exc_val, exc_tb):
-        """Context manager exit."""
         self.stop()
