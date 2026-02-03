@@ -7,6 +7,7 @@ from .joystick_controller import JoystickController
 from .throttle_controller import ThrottleController
 from .camera_controller import CameraController
 from .lidar_controller import LidarController
+from .pantilt_controller import PanTiltController
 from .socket_server import SocketServer
 from .data_publisher import DataPublisher
 
@@ -16,6 +17,7 @@ __all__ = [
     'ThrottleController',
     'CameraController',
     'LidarController',
+    'PanTiltController',
     'SocketServer',
     'DataPublisher',
 ]

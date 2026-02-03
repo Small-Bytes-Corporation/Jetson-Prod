@@ -5,13 +5,14 @@ Main entry point for the robocar control system.
 Usage:
     python3 main.py [--max-speed FLOAT] [--serial-port PATH] [--camera] 
                     [--enable-socket] [--lidar-port PATH] [--socket-port INT]
-                    [--no-motor]
+                    [--no-motor] [--pan-tilt-port PATH] [--no-pan-tilt]
+                    [--no-joystick] [--no-throttle] [--no-lidar] [--no-camera]
 """
 
 import argparse
 import sys
 from drive.applications import ManualDriveApp
-from drive.core.config import MAX_SPEED, DEFAULT_SERIAL_PORT, DEFAULT_LIDAR_PORT, SOCKETIO_PORT
+from drive.core.config import MAX_SPEED, DEFAULT_SERIAL_PORT, DEFAULT_LIDAR_PORT, SOCKETIO_PORT, PAN_TILT_SERIAL_PORT
 
 
 def main():
@@ -68,6 +69,43 @@ def main():
         help='Disable motor/VESC (useful for testing lidar/socket without car connected)'
     )
     
+    parser.add_argument(
+        '--pan-tilt-port',
+        type=str,
+        default=None,
+        help=f'Serial port for pan/tilt controller (default: {PAN_TILT_SERIAL_PORT})'
+    )
+    
+    parser.add_argument(
+        '--no-pan-tilt',
+        action='store_true',
+        help='Disable pan/tilt control'
+    )
+    
+    parser.add_argument(
+        '--no-joystick',
+        action='store_true',
+        help='Disable joystick controller (for testing without gamepad)'
+    )
+    
+    parser.add_argument(
+        '--no-throttle',
+        action='store_true',
+        help='Disable throttle controller (for testing)'
+    )
+    
+    parser.add_argument(
+        '--no-lidar',
+        action='store_true',
+        help='Disable lidar (even if --lidar-port is specified)'
+    )
+    
+    parser.add_argument(
+        '--no-camera',
+        action='store_true',
+        help='Explicitly disable camera (overrides --camera flag)'
+    )
+    
     args = parser.parse_args()
     
     # Create manual drive application
@@ -77,14 +115,22 @@ def main():
         # Use default lidar port if enable-socket is set but lidar-port not specified
         lidar_port = args.lidar_port if args.lidar_port else (DEFAULT_LIDAR_PORT if args.enable_socket else None)
         
+        # Determine use_lidar: enabled if lidar_port provided and not explicitly disabled
+        use_lidar = None if args.no_lidar else (lidar_port is not None)
+        
         app = ManualDriveApp(
             max_speed=args.max_speed,
             serial_port=args.serial_port,
-            use_camera=args.camera,
+            use_camera=args.camera and not args.no_camera,
             enable_socket=args.enable_socket,
-            lidar_port=lidar_port,
+            lidar_port=lidar_port if not args.no_lidar else None,
             socket_port=args.socket_port,
-            use_motor=not args.no_motor
+            use_motor=not args.no_motor,
+            pan_tilt_port=args.pan_tilt_port,
+            use_pan_tilt=not args.no_pan_tilt,
+            use_joystick=not args.no_joystick,
+            use_throttle=not args.no_throttle,
+            use_lidar=use_lidar
         )
         
         # Run the application

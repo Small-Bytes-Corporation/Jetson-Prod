@@ -6,12 +6,12 @@ import time
 import signal
 from drive.core import (
     MotorController, JoystickController, ThrottleController, CameraController,
-    LidarController, SocketServer, DataPublisher
+    LidarController, PanTiltController, SocketServer, DataPublisher
 )
 from drive.core.joystick_controller import Input
 from drive.core.config import (
     LOOP_SLEEP_TIME, DEFAULT_SERIAL_PORT, MAX_SPEED,
-    DEFAULT_LIDAR_PORT, SOCKETIO_PORT
+    DEFAULT_LIDAR_PORT, SOCKETIO_PORT, PAN_TILT_SERIAL_PORT
 )
 
 
@@ -22,7 +22,8 @@ class ManualDriveApp:
     
     def __init__(self, max_speed=MAX_SPEED, serial_port=DEFAULT_SERIAL_PORT, 
                  use_camera=False, enable_socket=False, lidar_port=None, socket_port=SOCKETIO_PORT,
-                 use_motor=True):
+                 use_motor=True, pan_tilt_port=None, use_pan_tilt=True,
+                 use_joystick=True, use_throttle=True, use_lidar=None):
         """
         Initialize the manual drive application.
         
@@ -34,19 +35,37 @@ class ManualDriveApp:
             lidar_port: Serial port for lidar (e.g., '/dev/ttyUSB0'). If None, lidar is disabled.
             socket_port: Port for socket.io server.
             use_motor: Whether to enable motor/VESC. If False, motor is disabled (mock mode).
+            pan_tilt_port: Serial port for pan/tilt controller. If None, uses default from config.
+            use_pan_tilt: Whether to enable pan/tilt control. If False, pan/tilt is disabled.
+            use_joystick: Whether to enable joystick controller. If False, joystick is disabled.
+            use_throttle: Whether to enable throttle controller. If False, throttle is disabled.
+            use_lidar: Whether to enable lidar. If None, auto-enabled if lidar_port is provided.
         """
         self.max_speed = max_speed
         self.serial_port = serial_port
-        self.use_camera = use_camera
-        self.enable_socket = enable_socket
-        self.lidar_port = lidar_port
-        self.use_motor = use_motor
         
-        self.motor = MotorController(serial_port=serial_port, enabled=use_motor)
-        self.joystick = JoystickController()
-        self.throttle = ThrottleController(max_speed=max_speed)
+        # Module flags (stored as attributes for documentation and introspection)
+        self.use_motor = use_motor
+        self.use_joystick = use_joystick
+        self.use_throttle = use_throttle
+        self.use_camera = use_camera
+        self.use_lidar = use_lidar if use_lidar is not None else (lidar_port is not None)
+        self.use_pan_tilt = use_pan_tilt
+        self.enable_socket = enable_socket
+        
+        # Store lidar_port for reference
+        self.lidar_port = lidar_port
+        
+        # Initialize controllers based on flags
+        self.motor = MotorController(serial_port=serial_port, enabled=use_motor) if use_motor else None
+        self.joystick = JoystickController() if use_joystick else None
+        self.throttle = ThrottleController(max_speed=max_speed) if use_throttle else None
         self.camera = CameraController() if use_camera else None
-        self.lidar = LidarController(serial_port=lidar_port) if lidar_port else None
+        self.lidar = LidarController(serial_port=lidar_port) if self.use_lidar and lidar_port else None
+        self.pantilt = PanTiltController(
+            serial_port=pan_tilt_port or PAN_TILT_SERIAL_PORT,
+            enabled=use_pan_tilt
+        ) if use_pan_tilt else None
         
         # Socket.io components
         self.socket_server = None
@@ -78,6 +97,8 @@ class ManualDriveApp:
         Returns:
             bool: True if exit requested, False otherwise.
         """
+        if not self.use_joystick or self.joystick is None:
+            return False
         return (self.joystick.get_button(Input.BACK) and 
                 self.joystick.get_button(Input.START))
     
@@ -99,21 +120,33 @@ class ManualDriveApp:
         try:
             # Initialize all controllers
             print("[ManualDrive] Initializing controllers...")
-            if self.use_motor:
-                self.motor.initialize()
-            else:
-                print("[ManualDrive] Motor disabled (mock mode)")
-            self.joystick.initialize()
             
-            if self.camera is not None:
+            if self.use_motor and self.motor is not None:
+                self.motor.initialize()
+            elif not self.use_motor:
+                print("[ManualDrive] Motor disabled")
+            
+            if self.use_joystick and self.joystick is not None:
+                self.joystick.initialize()
+            elif not self.use_joystick:
+                print("[ManualDrive] Joystick disabled")
+            
+            if self.use_camera and self.camera is not None:
                 self.camera.initialize()
             
-            if self.lidar is not None:
+            if self.use_lidar and self.lidar is not None:
                 try:
                     self.lidar.initialize()
                 except Exception as e:
                     print(f"[ManualDrive] Warning: Failed to initialize lidar: {e}")
                     self.lidar = None
+            
+            if self.use_pan_tilt and self.pantilt is not None:
+                try:
+                    self.pantilt.initialize()
+                except Exception as e:
+                    print(f"[ManualDrive] Warning: Failed to initialize pan/tilt: {e}")
+                    self.pantilt = None
             
             # Start socket server and data publisher if enabled
             if self.enable_socket and self.socket_server is not None:
@@ -126,39 +159,60 @@ class ManualDriveApp:
             
             # Main control loop
             while self.running:
-                # Update joystick inputs
-                self.joystick.update()
+                # Update joystick inputs (if enabled)
+                if self.use_joystick and self.joystick is not None:
+                    self.joystick.update()
                 
                 # Check for exit request
                 if self._handle_exit():
                     print("[ManualDrive] Exit requested (BACK+START).")
                     break
                 
-                # Compute target throttle from triggers
-                rt_value = self.joystick.get_rt()
-                lt_value = self.joystick.get_lt()
-                target = self.throttle.compute_target(rt_value, lt_value)
+                # Compute target throttle from triggers (if enabled)
+                acceleration = 0.0
+                steering = 0.0
                 
-                # Update throttle with smooth interpolation
-                self.throttle.update(target)
-                acceleration = self.throttle.get_acceleration()
+                if self.use_throttle and self.throttle is not None and self.use_joystick and self.joystick is not None:
+                    rt_value = self.joystick.get_rt()
+                    lt_value = self.joystick.get_lt()
+                    target = self.throttle.compute_target(rt_value, lt_value)
+                    
+                    # Update throttle with smooth interpolation
+                    self.throttle.update(target)
+                    acceleration = self.throttle.get_acceleration()
                 
-                # Get steering input
-                steering = self.joystick.get_steering()
+                # Get steering input (if joystick enabled)
+                if self.use_joystick and self.joystick is not None:
+                    steering = self.joystick.get_steering()
                 
                 # Apply motor commands (only if motor is enabled)
-                if self.use_motor:
+                if self.use_motor and self.motor is not None:
                     self.motor.set_commands(acceleration, steering)
                 
+                # Process pan/tilt control with D-pad (discrete movement)
+                if self.use_pan_tilt and self.pantilt is not None and self.use_joystick and self.joystick is not None:
+                    # Read D-pad/hat values (-1, 0, or 1)
+                    hat_x = self.joystick.get_axis(Input.HAT_X)  # Left (-1) / Right (1)
+                    hat_y = self.joystick.get_axis(Input.HAT_Y)  # Down (-1) / Up (1)
+                    
+                    # Convert to deltas: hat_x controls pan, hat_y controls tilt
+                    # pygame hat: hat_x: Left=-1, Right=+1; hat_y: Down=-1, Up=+1
+                    pan_delta = hat_x  # Left = -1, Right = +1
+                    tilt_delta = hat_y  # Down = -1, Up = +1
+                    
+                    # Update pan/tilt with discrete movement
+                    self.pantilt.update(pan_delta, tilt_delta)
+                
                 # Process camera if enabled
-                if self.use_camera:
+                if self.use_camera and self.camera is not None:
                     frame = self._process_camera()
                     if frame is not None:
                         # Frame available for display/processing
                         pass
                 
                 # Print status
-                print(f"Duty: {acceleration:.3f} | Steer: {(steering + 1) / 2:.3f}")
+                if self.use_throttle or self.use_joystick:
+                    print(f"Duty: {acceleration:.3f} | Steer: {(steering + 1) / 2:.3f}")
                 
                 # Control loop frequency
                 time.sleep(LOOP_SLEEP_TIME)
@@ -183,15 +237,19 @@ class ManualDriveApp:
             self.socket_server.stop()
         
         # Stop motor (only if enabled)
-        if self.use_motor:
+        if self.use_motor and self.motor is not None:
             self.motor.stop()
         
         # Stop camera
-        if self.camera is not None:
+        if self.use_camera and self.camera is not None:
             self.camera.stop()
         
         # Stop lidar
-        if self.lidar is not None:
+        if self.use_lidar and self.lidar is not None:
             self.lidar.stop()
+        
+        # Stop pan/tilt
+        if self.use_pan_tilt and self.pantilt is not None:
+            self.pantilt.stop()
         
         print("[ManualDrive] Shutdown complete.")

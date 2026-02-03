@@ -102,3 +102,13 @@ PUBLISH_RATE = 10  # Hz (fréquence d'envoi des données)
 
 # Loop timing
 LOOP_SLEEP_TIME = 0.05
+
+# Pan/Tilt constants
+PAN_TILT_BAUDRATE = 115200
+PAN_TILT_SERIAL_PORT = '/dev/ttyACM0'  # Default, can be overridden via CLI
+PAN_MIN = -1.0  # Minimum pan position
+PAN_MAX = 1.0   # Maximum pan position
+TILT_MIN = -1.0  # Minimum tilt position
+TILT_MAX = 1.0   # Maximum tilt position
+PAN_TILT_STEP_SIZE = 0.05  # Step size for discrete movement
+PAN_TILT_SEND_HZ = 20  # Serial communication frequency
