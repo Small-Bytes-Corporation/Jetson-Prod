@@ -10,7 +10,10 @@ from .lidar_controller import LidarController
 from .pantilt_controller import PanTiltController
 from .socket_server import SocketServer
 from .data_publisher import DataPublisher
-from .rtk_controller import RTKController
+try:
+    from .rtk_controller import RTKController
+except Exception:
+    RTKController = None
 
 __all__ = [
     "MotorController",
