@@ -129,35 +129,31 @@ class ManualDriveApp:
         return None
     
     def run(self):
-        """
-        Run the main control loop.
-        """
         try:
-            # Initialize all controllers
             print("[ManualDrive] Initializing controllers...")
-            
+
             if self.use_motor and self.motor is not None:
                 try:
                     self.motor.initialize()
                 except Exception as e:
                     print(f"[ManualDrive] Warning: Failed to initialize motor: {e}")
-                    print("[ManualDrive] Motor will be disabled")
                     self.motor = None
                     self.use_motor = False
-            elif not self.use_motor:
-                print("[ManualDrive] Motor disabled")
-            
+            else:
+                self.motor = None
+                self.use_motor = False
+
             if self.use_joystick and self.joystick is not None:
                 try:
                     self.joystick.initialize()
                 except Exception as e:
                     print(f"[ManualDrive] Warning: Failed to initialize joystick: {e}")
-                    print("[ManualDrive] Joystick will be disabled")
                     self.joystick = None
                     self.use_joystick = False
-            elif not self.use_joystick:
-                print("[ManualDrive] Joystick disabled")
-            
+            else:
+                self.joystick = None
+                self.use_joystick = False
+
             if self.use_camera and self.camera is not None:
                 try:
                     self.camera.initialize()
@@ -165,21 +161,32 @@ class ManualDriveApp:
                     print(f"[ManualDrive] Warning: Failed to initialize camera: {e}")
                     self.camera = None
                     self.use_camera = False
-            
+            else:
+                self.camera = None
+                self.use_camera = False
+
             if self.use_lidar and self.lidar is not None:
                 try:
                     self.lidar.initialize()
                 except Exception as e:
                     print(f"[ManualDrive] Warning: Failed to initialize lidar: {e}")
                     self.lidar = None
-            
+                    self.use_lidar = False
+            else:
+                self.lidar = None
+                self.use_lidar = False
+
             if self.use_pan_tilt and self.pantilt is not None:
                 try:
                     self.pantilt.initialize()
                 except Exception as e:
                     print(f"[ManualDrive] Warning: Failed to initialize pan/tilt: {e}")
                     self.pantilt = None
-            
+                    self.use_pan_tilt = False
+            else:
+                self.pantilt = None
+                self.use_pan_tilt = False
+
             if self.use_rtk and self.rtk is not None:
                 try:
                     self.rtk.initialize()
@@ -187,10 +194,10 @@ class ManualDriveApp:
                     print(f"[ManualDrive] Warning: Failed to initialize RTK: {e}")
                     self.rtk = None
                     self.use_rtk = False
-            elif not self.use_rtk:
-                print("[ManualDrive] RTK disabled")
-            
-            # Start socket server and data publisher if enabled
+            else:
+                self.rtk = None
+                self.use_rtk = False
+
             if self.enable_socket and self.socket_server is not None:
                 try:
                     self.socket_server.start()
@@ -199,93 +206,64 @@ class ManualDriveApp:
                     print(f"[ManualDrive] Socket.io server running on port {self.socket_server.port}")
                 except Exception as e:
                     print(f"[ManualDrive] Warning: Failed to start socket server: {e}")
-            
+
             print("[ManualDrive] Ready! Use BACK+START to exit.")
-            
-            # Main control loop
+
+            last_status_print = 0.0
+
             while self.running:
-                # Process pygame events (needed for joystick input)
                 pygame.event.pump()
-                
-                # Update joystick inputs (if enabled)
+
                 if self.use_joystick and self.joystick is not None:
                     self.joystick.update()
-                
-                # Check for exit request
-                if self._handle_exit():
-                    print("[ManualDrive] Exit requested (BACK+START).")
-                    break
-                
-                # Compute target throttle from triggers (if enabled)
+
+                    if self._handle_exit():
+                        print("[ManualDrive] Exit requested (BACK+START).")
+                        break
+
                 acceleration = 0.0
                 steering = 0.0
-                
+
                 if self.use_throttle and self.throttle is not None and self.use_joystick and self.joystick is not None:
                     rt_value = self.joystick.get_rt()
                     lt_value = self.joystick.get_lt()
                     target = self.throttle.compute_target(rt_value, lt_value)
-                    
-                    # Update throttle with smooth interpolation
                     self.throttle.update(target)
                     acceleration = self.throttle.get_acceleration()
-                
-                # Get steering input (if joystick enabled)
+
                 if self.use_joystick and self.joystick is not None:
                     steering = self.joystick.get_steering()
-                
-                # Apply motor commands (only if motor is enabled)
+
                 if self.use_motor and self.motor is not None:
                     self.motor.set_commands(acceleration, steering)
-                
-                # Process pan/tilt control with D-pad (flèches du contrôleur)
+
                 if self.use_pan_tilt and self.pantilt is not None and self.use_joystick and self.joystick is not None:
-                    # Read D-pad/hat values (flèches du contrôleur)
-                    hat_x = self.joystick.get_axis(Input.HAT_X)  # Left (-1) / Right (1)
-                    hat_y = self.joystick.get_axis(Input.HAT_Y)  # Down (-1) / Up (1)
-                    
-                    # Convertir les valeurs du D-pad en deltas pour update() (accumulation continue)
-                    pan_delta = hat_x  # Left = -1, Right = +1
-                    tilt_delta = hat_y  # Down = -1, Up = +1
-                    
-                    # Update pan/tilt avec accumulation continue (ne se réinitialise pas)
-                    self.pantilt.update(pan_delta, tilt_delta)
-                    
-                    # Debug: déterminer quelle flèche est appuyée
-                    arrow = "NONE"
-                    if hat_x == -1:
-                        arrow = "LEFT"
-                    elif hat_x == 1:
-                        arrow = "RIGHT"
-                    elif hat_y == 1:
-                        arrow = "UP"
-                    elif hat_y == -1:
-                        arrow = "DOWN"
-                    
-                    # Récupérer l'état actuel de x et y
-                    pan_pos, tilt_pos = self.pantilt.get_position()
-                    
-                    # Print debug avec état des flèches et positions
-                    sys.stdout.write(f"\rD-pad: {arrow:4s} | hat_x: {hat_x:+2.0f} | hat_y: {hat_y:+2.0f} | Pan(X): {pan_pos:+.2f} | Tilt(Y): {tilt_pos:+.2f}   ")
-                    sys.stdout.flush()
-                
-                # Process camera if enabled
+                    hat_x = self.joystick.get_axis(Input.HAT_X)
+                    hat_y = self.joystick.get_axis(Input.HAT_Y)
+
+                    if hat_x != 0 or hat_y != 0:
+                        self.pantilt.update(hat_x, hat_y)
+                    else:
+                        pan_axis = self.joystick.get_axis(Axis.RIGHT_JOY_X)
+                        tilt_axis = -self.joystick.get_axis(Axis.RIGHT_JOY_Y)
+                        self.pantilt.set_analog_position(pan_axis, tilt_axis)
+
                 if self.use_camera and self.camera is not None:
                     frame = self._process_camera()
                     if frame is not None:
-                        # Frame available for display/processing
                         pass
-                
-                # Update RTK (pose/IMU) if enabled
+
                 if self.use_rtk and self.rtk is not None:
                     self.rtk.update()
-                
-                # Print status
-                if self.use_throttle or self.use_joystick:
-                    print(f"Duty: {acceleration:.3f} | Steer: {(steering + 1) / 2:.3f}")
-                
-                # Control loop frequency
+
+                now = time.monotonic()
+                if now - last_status_print > 0.2:
+                    last_status_print = now
+                    sys.stdout.write(f"\rDuty: {acceleration:.3f} | Steer: {(steering + 1) / 2:.3f}   ")
+                    sys.stdout.flush()
+
                 time.sleep(LOOP_SLEEP_TIME)
-        
+
         except KeyboardInterrupt:
             print("\n[ManualDrive] Keyboard interrupt received.")
         except Exception as e:
@@ -293,7 +271,7 @@ class ManualDriveApp:
             raise
         finally:
             self.cleanup()
-    
+
     def cleanup(self):
         """Clean up resources."""
         print("[ManualDrive] Cleaning up...")
