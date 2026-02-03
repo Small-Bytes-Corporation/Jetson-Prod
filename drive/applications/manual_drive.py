@@ -164,7 +164,7 @@ class ManualDriveApp:
                     self.camera = None
                     self.use_camera = False
             else:
-                    print("[ManualDrive] Vérifiez câble USB, permissions (udev), et lancez 'python3 main.py --list-devices' pour lister les caméras.")
+                print("[ManualDrive] Vérifiez câble USB, permissions (udev), et lancez 'python3 main.py --list-devices' pour lister les caméras.")
                 self.camera = None
                 self.use_camera = False
 
