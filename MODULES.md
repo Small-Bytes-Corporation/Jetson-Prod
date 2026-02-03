@@ -33,7 +33,7 @@ Contrôle le moteur VESC (Vedder Electronic Speed Controller) pour la propulsion
 **Arguments CLI**:
 - `--no-motor`: Désactive le contrôleur moteur (mode mock)
 
-**Port série**: Configuré via `--serial-port` (défaut: `/dev/ttyACM0`)
+**Port série**: Configuré via `--serial-port` (défaut: `config.DEFAULT_SERIAL_PORT`, typiquement `/dev/ttyACM1`)
 
 **Dépendances**:
 - Nécessite `ThrottleController` pour calculer l'accélération
@@ -183,7 +183,7 @@ Contrôle le système pan/tilt de la caméra via communication série avec un Ar
 - `--pan-tilt-port PATH`: Spécifie le port série du contrôleur pan/tilt
 - `--no-pan-tilt`: Désactive le contrôle pan/tilt
 
-**Port série**: Configuré via `--pan-tilt-port` (défaut: `/dev/ttyACM0`)
+**Port série**: Configuré via `--pan-tilt-port` (défaut: `config.PAN_TILT_SERIAL_PORT`, typiquement `/dev/ttyACM2`)
 
 **Contrôles**:
 - D-pad gauche/droite: Pan (rotation horizontale)
@@ -299,7 +299,7 @@ python3 main.py --enable-socket --no-rtk
 ### Arguments de configuration générale
 
 - `--max-speed FLOAT`: Vitesse maximale (défaut: 0.15)
-- `--serial-port PATH`: Port série pour le moteur VESC (défaut: `/dev/ttyACM0`)
+- `--serial-port PATH`: Port série pour le moteur VESC (défaut: `config.DEFAULT_SERIAL_PORT`, typiquement `/dev/ttyACM1`)
 
 ### Arguments d'activation de modules
 
@@ -318,10 +318,33 @@ python3 main.py --enable-socket --no-rtk
 
 ### Arguments de configuration de ports
 
-- `--lidar-port PATH`: Port série pour le lidar
-- `--pan-tilt-port PATH`: Port série pour le pan/tilt
-- `--rtk-port PATH`: Port série pour le RTK GNSS
-- `--socket-port INT`: Port pour le serveur Socket.io
+- `--lidar-port PATH`: Port série pour le lidar (défaut: auto-détection ou `config.DEFAULT_LIDAR_PORT`)
+- `--pan-tilt-port PATH`: Port série pour le pan/tilt (défaut: `config.PAN_TILT_SERIAL_PORT`, typiquement `/dev/ttyACM2`)
+- `--rtk-port PATH`: Port série pour le RTK GNSS (défaut: auto-détection ou `config.DEFAULT_RTK_SERIAL_PORT`)
+- `--socket-port INT`: Port pour le serveur Socket.io (défaut: 3000)
+
+### Arguments Socket
+
+- `--socket-debug`: Afficher les payloads complets (sensor_data, status) sur la console
+
+### Outils
+
+- `--list-devices`: Lister les ports série et caméras DepthAI avec identification (Lidar, RTK, etc.) puis quitter
+- `--no-probe`: Avec `--list-devices`, n'afficher que les infos USB sans sondage protocole (plus rapide, pas d'ouverture exclusive de port)
+
+---
+
+## Découverte des périphériques
+
+La commande `python3 main.py --list-devices` affiche les ports série et les caméras DepthAI détectés, avec une identification des périphériques (Lidar, RTK, etc.) lorsque le sondage protocole est activé. Avec `--no-probe`, seules les informations USB sont listées, sans ouvrir les ports en exclusivité. Implémentation : [drive/core/device_discovery.py](drive/core/device_discovery.py).
+
+```bash
+# Identifier qui est branché où (Lidar, RTK, caméra DepthAI)
+python3 main.py --list-devices
+
+# Liste USB uniquement (rapide, sans sondage)
+python3 main.py --list-devices --no-probe
+```
 
 ---
 
@@ -406,10 +429,13 @@ SocketServer (indépendant)
 Les constantes de configuration peuvent être modifiées dans `drive/core/config.py`:
 
 - `MAX_SPEED`: Vitesse maximale par défaut
+- `DEFAULT_SERIAL_PORT`: Port série moteur VESC par défaut
+- `PAN_TILT_SERIAL_PORT`: Port série pan/tilt par défaut
 - `CAM_WIDTH`, `CAM_HEIGHT`, `CAM_FPS`: Configuration caméra
 - `PAN_TILT_STEP_SIZE`: Taille du pas pour mouvement discret pan/tilt
 - `PAN_MIN/MAX`, `TILT_MIN/MAX`: Limites pan/tilt
 - `LOOP_SLEEP_TIME`: Fréquence de la boucle principale
+- `PUBLISH_RATE`: Fréquence de publication Socket.io (Hz)
 - `SOCKETIO_PORT`: Port par défaut du serveur Socket.io
 - `DEFAULT_RTK_SERIAL_PORT`, `RTK_BAUDRATE`: Port et débit série RTK
 

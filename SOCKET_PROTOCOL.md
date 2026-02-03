@@ -1,8 +1,10 @@
 # Protocole Socket.io - Robocar Sensor Stream
 
+Référence canonique (format JSON exact et champs détaillés) : [docs/PROTOCOL.md](docs/PROTOCOL.md).
+
 ## Vue d'ensemble
 
-Le serveur socket.io diffuse les données du lidar et de la caméra en temps réel aux clients connectés.
+Le serveur socket.io diffuse les données du lidar, de la caméra et du RTK GNSS (pose + IMU) en temps réel aux clients connectés.
 
 ## Connexion
 
@@ -16,7 +18,7 @@ Par défaut: `http://localhost:3000`
 
 #### `sensor_data`
 
-Données des capteurs (lidar + caméra) envoyées périodiquement.
+Données des capteurs (lidar + caméra + RTK) envoyées périodiquement. Chaque bloc peut être `null` si la source n'est pas disponible.
 
 **Format:**
 ```json
@@ -24,12 +26,7 @@ Données des capteurs (lidar + caméra) envoyées périodiquement.
   "timestamp": 1234567890.123,
   "lidar": {
     "points": [
-      {
-        "angle": 0.0,
-        "distance": 1.5,
-        "intensity": 100
-      },
-      ...
+      { "angle": 0.0, "distance": 1.5, "intensity": 100 }
     ],
     "scan_complete": true
   },
@@ -38,6 +35,22 @@ Données des capteurs (lidar + caméra) envoyées périodiquement.
     "width": 320,
     "height": 180,
     "format": "jpeg"
+  },
+  "rtk": {
+    "pose": {
+      "lla_deg": [48.85, 2.35, 100.0],
+      "solution_type": "RTK_FIX",
+      "position_std_enu_m": [0.01, 0.01, 0.02],
+      "gps_time": 1234567890.5,
+      "p1_time": 1234567890.5,
+      "ypr_deg": [0.1, -0.05, 0.0],
+      "velocity_body_mps": [1.0, 0.0, 0.0]
+    },
+    "imu": {
+      "accel_xyz": [0.1, 0.0, 9.81],
+      "gyro_xyz": [0.001, 0.002, 0.0],
+      "p1_time": 1234567890.5
+    }
   }
 }
 ```
@@ -49,17 +62,27 @@ Données des capteurs (lidar + caméra) envoyées périodiquement.
 - `camera.frame`: Image JPEG encodée en base64
 - `camera.width/height`: Dimensions de l'image
 - `camera.format`: Format de l'image ("jpeg")
+- `rtk`: Objet ou `null`. `pose`: position GNSS (lla_deg, solution_type, etc.). `imu`: accélération (accel_xyz m/s²), gyro (gyro_xyz rad/s). Voir [docs/PROTOCOL.md](docs/PROTOCOL.md) pour les champs détaillés.
 
 #### `status`
 
-Statut du système envoyé périodiquement.
+Deux formats possibles :
 
-**Format:**
+**À la connexion** (envoyé une fois quand un client se connecte) :
+```json
+{
+  "message": "Connected to robocar sensor stream",
+  "connected": true
+}
+```
+
+**Périodique** (envoyé à la fréquence de publication, avec l'état des périphériques) :
 ```json
 {
   "timestamp": 1234567890.123,
   "lidar_connected": true,
   "camera_connected": true,
+  "rtk_connected": true,
   "clients_connected": 2
 }
 ```
@@ -115,15 +138,20 @@ socket.on('sensor_data', (data) => {
   // Traiter les données caméra
   if (data.camera && data.camera.frame) {
     const imageData = `data:image/${data.camera.format};base64,${data.camera.frame}`;
-    // Afficher l'image dans un élément <img>
     document.getElementById('camera').src = imageData;
+  }
+  // Traiter les données RTK (pose + IMU)
+  if (data.rtk && (data.rtk.pose || data.rtk.imu)) {
+    console.log('RTK:', data.rtk);
   }
 });
 
-// Écouter le statut
+// Écouter le statut (à la connexion: message + connected; périodique: timestamp + *_connected + clients_connected)
 socket.on('status', (status) => {
   console.log('Status:', status);
-  console.log(`Clients connectés: ${status.clients_connected}`);
+  if (status.clients_connected !== undefined) {
+    console.log(`Clients connectés: ${status.clients_connected}`);
+  }
 });
 
 // Gestion de la connexion

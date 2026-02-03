@@ -91,6 +91,23 @@ class RTKController:
         except Exception as e:
             print(f"[RTK] Error: {e}")
 
+    @staticmethod
+    def _timestamp_to_float(t):
+        """Convert Fusion Engine Timestamp (or similar) to float seconds for JSON."""
+        if t is None:
+            return None
+        try:
+            return float(t)
+        except (TypeError, ValueError):
+            pass
+        try:
+            s = getattr(t, "seconds", 0) or 0
+            ns = getattr(t, "nanos", 0) or getattr(t, "nanoseconds", 0) or 0
+            return float(s) + float(ns) / 1e9
+        except (TypeError, ValueError):
+            pass
+        return None
+
     def _pose_to_dict(self, msg):
         """Convert PoseMessage (or ROS pose) to a simple dict."""
         out = {}
@@ -101,9 +118,9 @@ class RTKController:
         if hasattr(msg, "position_std_enu_m"):
             out["position_std_enu_m"] = list(msg.position_std_enu_m) if hasattr(msg.position_std_enu_m, "__iter__") else msg.position_std_enu_m
         if hasattr(msg, "gps_time"):
-            out["gps_time"] = msg.gps_time
+            out["gps_time"] = self._timestamp_to_float(msg.gps_time)
         if hasattr(msg, "p1_time"):
-            out["p1_time"] = msg.p1_time
+            out["p1_time"] = self._timestamp_to_float(msg.p1_time)
         if hasattr(msg, "ypr_deg"):
             out["ypr_deg"] = list(msg.ypr_deg) if hasattr(msg.ypr_deg, "__iter__") else msg.ypr_deg
         if hasattr(msg, "velocity_body_mps"):
@@ -122,7 +139,7 @@ class RTKController:
         if gyro is not None:
             out["gyro_xyz"] = list(gyro) if hasattr(gyro, "__iter__") else gyro
         if hasattr(msg, "p1_time"):
-            out["p1_time"] = msg.p1_time
+            out["p1_time"] = self._timestamp_to_float(msg.p1_time)
         return out if out else None
 
     def get_latest_pose(self):

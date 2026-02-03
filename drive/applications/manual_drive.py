@@ -28,6 +28,7 @@ class ManualDriveApp:
     
     def __init__(self, max_speed=MAX_SPEED, serial_port=DEFAULT_SERIAL_PORT, 
                  use_camera=False, enable_socket=False, lidar_port=None, socket_port=SOCKETIO_PORT,
+                 socket_debug=False,
                  use_motor=True, pan_tilt_port=None, use_pan_tilt=True,
                  use_joystick=True, use_throttle=True, use_lidar=None,
                  rtk_port=None, use_rtk=True):
@@ -41,6 +42,7 @@ class ManualDriveApp:
             enable_socket: Whether to enable socket.io server for data streaming.
             lidar_port: Serial port for lidar (e.g., '/dev/ttyUSB0'). If None, lidar is disabled.
             socket_port: Port for socket.io server.
+            socket_debug: If True, print full socket payloads (sensor_data, status) to console.
             use_motor: Whether to enable motor/VESC. If False, motor is disabled (mock mode).
             pan_tilt_port: Serial port for pan/tilt controller. If None, uses default from config.
             use_pan_tilt: Whether to enable pan/tilt control. If False, pan/tilt is disabled.
@@ -86,7 +88,7 @@ class ManualDriveApp:
         self.data_publisher = None
         
         if enable_socket:
-            self.socket_server = SocketServer(port=socket_port)
+            self.socket_server = SocketServer(port=socket_port, debug_payload=socket_debug)
             self.data_publisher = DataPublisher(
                 lidar_controller=self.lidar,
                 camera_controller=self.camera,
@@ -163,6 +165,7 @@ class ManualDriveApp:
                     self.camera.initialize()
                 except Exception as e:
                     print(f"[ManualDrive] Warning: Failed to initialize camera: {e}")
+                    print("[ManualDrive] Vérifiez câble USB, permissions (udev), et lancez 'python3 main.py --list-devices' pour lister les caméras.")
                     self.camera = None
                     self.use_camera = False
             
@@ -200,11 +203,15 @@ class ManualDriveApp:
                 except Exception as e:
                     print(f"[ManualDrive] Warning: Failed to start socket server: {e}")
             
+            # Initialize pygame video/event system if not already done (e.g. when joystick disabled)
+            if not self.use_joystick or self.joystick is None:
+                pygame.init()
+            
             print("[ManualDrive] Ready! Use BACK+START to exit.")
             
             # Main control loop
             while self.running:
-                # Process pygame events (needed for joystick input)
+                # Process pygame events (needed for joystick input when enabled)
                 pygame.event.pump()
                 
                 # Update joystick inputs (if enabled)

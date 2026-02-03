@@ -2,7 +2,7 @@
 
 ## Vue d'ensemble
 
-Cette documentation décrit comment implémenter un client C++ pour recevoir et parser les données du serveur socket.io du robocar. Le serveur diffuse les données du lidar et de la caméra en temps réel.
+Cette documentation décrit comment implémenter un client C++ pour recevoir et parser les données du serveur socket.io du robocar. Le serveur diffuse les données du lidar, de la caméra et du RTK GNSS (pose + IMU) en temps réel.
 
 ## Bibliothèques recommandées
 
@@ -26,29 +26,23 @@ Par défaut: `http://localhost:3000`
 
 Tous les messages sont au format JSON et sont envoyés via les events socket.io suivants :
 
-- `sensor_data` : Données lidar + caméra
-- `status` : Statut du système
+- `sensor_data` : Données lidar + caméra + RTK
+- `status` : Statut du système (deux formats : à la connexion ou périodique)
 - `pong` : Réponse au ping
 
 ## Event: `sensor_data`
 
 ### Structure JSON
 
+Chaque bloc `lidar`, `camera`, `rtk` peut être `null` si la source n'est pas disponible.
+
 ```json
 {
   "timestamp": 1234567890.123,
   "lidar": {
     "points": [
-      {
-        "angle": 0.0,
-        "distance": 1.5,
-        "intensity": 100
-      },
-      {
-        "angle": 1.0,
-        "distance": 2.3,
-        "intensity": 150
-      }
+      { "angle": 0.0, "distance": 1.5, "intensity": 100 },
+      { "angle": 1.0, "distance": 2.3, "intensity": 150 }
     ],
     "scan_complete": true
   },
@@ -57,6 +51,22 @@ Tous les messages sont au format JSON et sont envoyés via les events socket.io 
     "width": 320,
     "height": 180,
     "format": "jpeg"
+  },
+  "rtk": {
+    "pose": {
+      "lla_deg": [48.85, 2.35, 100.0],
+      "solution_type": "RTK_FIX",
+      "position_std_enu_m": [0.01, 0.01, 0.02],
+      "gps_time": 1234567890.5,
+      "p1_time": 1234567890.5,
+      "ypr_deg": [0.1, -0.05, 0.0],
+      "velocity_body_mps": [1.0, 0.0, 0.0]
+    },
+    "imu": {
+      "accel_xyz": [0.1, 0.0, 9.81],
+      "gyro_xyz": [0.001, 0.002, 0.0],
+      "p1_time": 1234567890.5
+    }
   }
 }
 ```
@@ -82,10 +92,33 @@ struct CameraData {
     std::string format;        // "jpeg"
 };
 
+// RTK GNSS (pose + IMU) - champs optionnels selon le message Fusion Engine
+struct RTKPose {
+    std::vector<double> lla_deg;
+    std::string solution_type;
+    std::vector<double> position_std_enu_m;
+    double gps_time = 0;
+    double p1_time = 0;
+    std::vector<double> ypr_deg;
+    std::vector<double> velocity_body_mps;
+};
+
+struct RTKImu {
+    std::vector<double> accel_xyz;   // m/s²
+    std::vector<double> gyro_xyz;    // rad/s
+    double p1_time = 0;
+};
+
+struct RTKData {
+    std::optional<RTKPose> pose;
+    std::optional<RTKImu> imu;
+};
+
 struct SensorData {
     double timestamp;          // Timestamp Unix (secondes)
     LidarData lidar;
     CameraData camera;
+    std::optional<RTKData> rtk;  // null si non disponible
 };
 ```
 
@@ -131,6 +164,39 @@ SensorData parseSensorData(const std::string& json_string) {
         data.camera.format = camera_json.value("format", "jpeg");
     }
     
+    // Parser données RTK (optionnel)
+    if (j.contains("rtk") && !j["rtk"].is_null()) {
+        RTKData rtk;
+        json rtk_json = j["rtk"];
+        if (rtk_json.contains("pose") && !rtk_json["pose"].is_null()) {
+            RTKPose pose;
+            auto p = rtk_json["pose"];
+            if (p.contains("lla_deg") && p["lla_deg"].is_array())
+                for (auto& v : p["lla_deg"]) pose.lla_deg.push_back(v.get<double>());
+            pose.solution_type = p.value("solution_type", "");
+            if (p.contains("position_std_enu_m") && p["position_std_enu_m"].is_array())
+                for (auto& v : p["position_std_enu_m"]) pose.position_std_enu_m.push_back(v.get<double>());
+            pose.gps_time = p.value("gps_time", 0.0);
+            pose.p1_time = p.value("p1_time", 0.0);
+            if (p.contains("ypr_deg") && p["ypr_deg"].is_array())
+                for (auto& v : p["ypr_deg"]) pose.ypr_deg.push_back(v.get<double>());
+            if (p.contains("velocity_body_mps") && p["velocity_body_mps"].is_array())
+                for (auto& v : p["velocity_body_mps"]) pose.velocity_body_mps.push_back(v.get<double>());
+            rtk.pose = pose;
+        }
+        if (rtk_json.contains("imu") && !rtk_json["imu"].is_null()) {
+            RTKImu imu;
+            auto m = rtk_json["imu"];
+            if (m.contains("accel_xyz") && m["accel_xyz"].is_array())
+                for (auto& v : m["accel_xyz"]) imu.accel_xyz.push_back(v.get<double>());
+            if (m.contains("gyro_xyz") && m["gyro_xyz"].is_array())
+                for (auto& v : m["gyro_xyz"]) imu.gyro_xyz.push_back(v.get<double>());
+            imu.p1_time = m.value("p1_time", 0.0);
+            rtk.imu = imu;
+        }
+        data.rtk = rtk;
+    }
+    
     return data;
 }
 ```
@@ -160,13 +226,25 @@ cv::Mat decodeCameraImage(const CameraData& camera_data) {
 
 ## Event: `status`
 
-### Structure JSON
+Deux formats possibles : **à la connexion** (envoyé une fois) ou **périodique** (envoyé à la fréquence de publication). Le parser doit gérer les champs optionnels.
+
+### Structure JSON à la connexion
+
+```json
+{
+  "message": "Connected to robocar sensor stream",
+  "connected": true
+}
+```
+
+### Structure JSON périodique
 
 ```json
 {
   "timestamp": 1234567890.123,
   "lidar_connected": true,
   "camera_connected": true,
+  "rtk_connected": true,
   "clients_connected": 2
 }
 ```
@@ -175,23 +253,33 @@ cv::Mat decodeCameraImage(const CameraData& camera_data) {
 
 ```cpp
 struct SystemStatus {
-    double timestamp;
-    bool lidar_connected;
-    bool camera_connected;
-    int clients_connected;
+    std::optional<double> timestamp;       // présent seulement en format périodique
+    std::optional<std::string> message;    // présent seulement à la connexion
+    std::optional<bool> connected;         // présent seulement à la connexion
+    bool lidar_connected = false;
+    bool camera_connected = false;
+    bool rtk_connected = false;
+    int clients_connected = 0;
 };
 ```
 
-### Exemple de parsing
+### Exemple de parsing (gère les deux formats)
 
 ```cpp
 SystemStatus parseStatus(const std::string& json_string) {
     SystemStatus status;
     json j = json::parse(json_string);
     
-    status.timestamp = j["timestamp"].get<double>();
+    if (j.contains("timestamp") && !j["timestamp"].is_null())
+        status.timestamp = j["timestamp"].get<double>();
+    if (j.contains("message") && j["message"].is_string())
+        status.message = j["message"].get<std::string>();
+    if (j.contains("connected") && !j["connected"].is_null())
+        status.connected = j["connected"].get<bool>();
+    
     status.lidar_connected = j.value("lidar_connected", false);
     status.camera_connected = j.value("camera_connected", false);
+    status.rtk_connected = j.value("rtk_connected", false);
     status.clients_connected = j.value("clients_connected", 0);
     
     return status;
@@ -309,21 +397,24 @@ private:
         if (!data.camera.frame_base64.empty()) {
             std::cout << "Camera: " << data.camera.width << "x" << data.camera.height 
                      << " (" << data.camera.format << ")" << std::endl;
-            
-            // Décoder et traiter l'image
             cv::Mat image = decodeCameraImage(data.camera);
-            if (!image.empty()) {
-                // Traiter l'image ici
-                std::cout << "Image décodée avec succès" << std::endl;
-            }
+            if (!image.empty()) std::cout << "Image décodée avec succès" << std::endl;
+        }
+        
+        if (data.rtk.has_value()) {
+            const auto& r = data.rtk.value();
+            if (r.pose.has_value()) std::cout << "RTK pose: " << r.pose->solution_type << std::endl;
+            if (r.imu.has_value()) std::cout << "RTK IMU disponible" << std::endl;
         }
     }
     
     void onStatus(const SystemStatus& status) {
         std::cout << "=== Status ===" << std::endl;
-        std::cout << "Timestamp: " << status.timestamp << std::endl;
+        if (status.message.has_value()) std::cout << "Message: " << *status.message << std::endl;
+        if (status.timestamp.has_value()) std::cout << "Timestamp: " << *status.timestamp << std::endl;
         std::cout << "Lidar connecté: " << (status.lidar_connected ? "Oui" : "Non") << std::endl;
         std::cout << "Camera connectée: " << (status.camera_connected ? "Oui" : "Non") << std::endl;
+        std::cout << "RTK connecté: " << (status.rtk_connected ? "Oui" : "Non") << std::endl;
         std::cout << "Clients connectés: " << status.clients_connected << std::endl;
     }
     
@@ -406,13 +497,19 @@ SensorData parseSensorData(const std::string& json_string) {
         // Parser caméra (optionnel)
         if (j.contains("camera") && !j["camera"].is_null()) {
             json camera_json = j["camera"];
-            
-            if (camera_json.contains("frame")) {
-                data.camera.frame_base64 = camera_json["frame"].get<std::string>();
-            }
+            if (camera_json.contains("frame")) data.camera.frame_base64 = camera_json["frame"].get<std::string>();
             data.camera.width = camera_json.value("width", 0);
             data.camera.height = camera_json.value("height", 0);
             data.camera.format = camera_json.value("format", "jpeg");
+        }
+        
+        // Parser RTK (optionnel) : rtk.pose, rtk.imu avec champs optionnels
+        if (j.contains("rtk") && !j["rtk"].is_null()) {
+            RTKData rtk;
+            json rtk_json = j["rtk"];
+            if (rtk_json.contains("pose") && !rtk_json["pose"].is_null()) { /* ... remplir rtk.pose ... */ }
+            if (rtk_json.contains("imu") && !rtk_json["imu"].is_null()) { /* ... remplir rtk.imu ... */ }
+            data.rtk = rtk;
         }
         
     } catch (const json::parse_error& e) {
@@ -440,6 +537,12 @@ SensorData parseSensorData(const std::string& json_string) {
 - **intensity** : `int` (0-255)
 - **frame** : `std::string` (chaîne base64)
 - **width/height** : `int` (pixels)
+- **rtk** : optionnel ; `pose` (lla_deg, solution_type, etc.), `imu` (accel_xyz m/s², gyro_xyz rad/s)
+
+### Status : deux formats
+
+- **À la connexion** : champs `message` et `connected` uniquement (pas de timestamp ni *_connected).
+- **Périodique** : champs `timestamp`, `lidar_connected`, `camera_connected`, `rtk_connected`, `clients_connected`. Le parser doit gérer les champs optionnels (ex. `timestamp` absent à la connexion).
 
 ### Fréquence de réception
 

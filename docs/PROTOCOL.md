@@ -61,7 +61,73 @@ Payload envoyé périodiquement avec l’état des périphériques et des client
 
 ### À la connexion
 
-Lorsqu’un client se connecte, le serveur envoie immédiatement un événement `status` avec par exemple `message: "Connected to robocar sensor stream"` et `connected: true`.
+Lorsqu’un client se connecte, le serveur envoie immédiatement un événement `status` avec le format « à la connexion » (voir section Format JSON exact ci-dessous).
+
+## Format JSON exact
+
+Chaque bloc (`lidar`, `camera`, `rtk`) peut être `null` si la source n’est pas disponible ou désactivée.
+
+### Exemple `sensor_data`
+
+```json
+{
+  "timestamp": 1234567890.123,
+  "lidar": {
+    "points": [
+      { "angle": 0.0, "distance": 1.5, "intensity": 120 },
+      { "angle": 1.2, "distance": 2.3, "intensity": 150 }
+    ],
+    "scan_complete": true
+  },
+  "camera": {
+    "frame": "/9j/4AAQSkZJRg...",
+    "width": 320,
+    "height": 180,
+    "format": "jpeg"
+  },
+  "rtk": {
+    "pose": {
+      "lla_deg": [48.8566, 2.3522, 100.0],
+      "solution_type": "RTK_FIX",
+      "position_std_enu_m": [0.01, 0.01, 0.02],
+      "gps_time": 1234567890.5,
+      "p1_time": 1234567890.5,
+      "ypr_deg": [0.1, -0.05, 0.0],
+      "velocity_body_mps": [1.0, 0.0, 0.0]
+    },
+    "imu": {
+      "accel_xyz": [0.1, 0.0, 9.81],
+      "gyro_xyz": [0.001, 0.002, 0.0],
+      "p1_time": 1234567890.5
+    }
+  }
+}
+```
+
+### Exemple `status` à la connexion
+
+Envoyé une fois lorsqu’un client se connecte (pas de `timestamp` ni des booléens périphériques).
+
+```json
+{
+  "message": "Connected to robocar sensor stream",
+  "connected": true
+}
+```
+
+### Exemple `status` périodique
+
+Envoyé à la fréquence de publication (`PUBLISH_RATE`), avec l’état des périphériques et le nombre de clients.
+
+```json
+{
+  "timestamp": 1234567890.123,
+  "lidar_connected": true,
+  "camera_connected": true,
+  "rtk_connected": true,
+  "clients_connected": 2
+}
+```
 
 ## Événements reçus par le serveur
 

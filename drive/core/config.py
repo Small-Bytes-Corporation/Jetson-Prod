@@ -69,25 +69,31 @@ def _get_available_serial_ports():
 
 def _detect_lidar_port():
     """
-    Detect the default lidar port based on the platform.
-    
-    Returns:
-        str: Default lidar port path.
+    Fallback lidar port when auto-detection (device_discovery) finds nothing.
+    Returns first available serial port or platform default.
     """
     available_ports = _get_available_serial_ports()
-    
     if available_ports:
-        # Return the first available port
         return available_ports[0]
-    
-    # If no port found, return platform-specific default
     if IS_MAC:
-        return '/dev/tty.usbserial-0001'  # Common Mac pattern (may need manual specification)
-    else:
-        return '/dev/ttyUSB0'  # Standard Linux/Jetson pattern
+        return '/dev/tty.usbserial-0001'
+    return '/dev/ttyUSB0'
 
 
-# Lidar constants
+def _detect_rtk_port():
+    """
+    Fallback RTK port when auto-detection (device_discovery) finds nothing.
+    Returns first available serial port or platform default.
+    """
+    available_ports = _get_available_serial_ports()
+    if available_ports:
+        return available_ports[0]
+    if IS_MAC:
+        return '/dev/tty.usbserial-0001'
+    return '/dev/ttyUSB0'
+
+
+# Lidar constants (real default is set at runtime via device_discovery in main)
 DEFAULT_LIDAR_PORT = _detect_lidar_port()
 
 LIDAR_BAUDRATE = 230400  # À vérifier selon documentation D500
@@ -114,6 +120,6 @@ PAN_TILT_STEP_SIZE = 0.05  # Step size for discrete movement
 PAN_TILT_SEND_HZ = 20  # Serial communication frequency
 PAN_TILT_DEADZONE = 0.08  # Deadzone for analog stick input
 
-# RTK GNSS (Point One / Quectel LG69T) constants
-DEFAULT_RTK_SERIAL_PORT = '/dev/ttyUSB0'
+# RTK GNSS (Point One / Quectel LG69T) constants (real default is set at runtime via device_discovery in main)
+DEFAULT_RTK_SERIAL_PORT = _detect_rtk_port()
 RTK_BAUDRATE = 460800

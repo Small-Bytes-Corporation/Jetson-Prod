@@ -2,10 +2,39 @@
 Socket.io server for broadcasting sensor data.
 """
 
+import json
 import threading
 from flask import Flask, request
 from flask_socketio import SocketIO, emit
 from .config import SOCKETIO_PORT, SOCKETIO_HOST, SOCKETIO_CORS_ORIGINS
+
+
+def _payload_for_debug(data, max_str_len=200, max_list_len=10):
+    """
+    Build a copy of the payload with large values summarized for console debug.
+    Converts non-JSON-serializable values to repr so json.dumps never fails.
+    """
+    if not isinstance(data, dict):
+        try:
+            json.dumps(data)
+            return data
+        except (TypeError, ValueError):
+            return repr(data)
+    out = {}
+    for k, v in data.items():
+        if isinstance(v, dict):
+            out[k] = _payload_for_debug(v, max_str_len, max_list_len)
+        elif isinstance(v, str) and len(v) > max_str_len:
+            out[k] = f"<str len={len(v)}>"
+        elif isinstance(v, list) and len(v) > max_list_len:
+            out[k] = f"<list len={len(v)}>"
+        else:
+            try:
+                json.dumps(v)
+                out[k] = v
+            except (TypeError, ValueError):
+                out[k] = repr(v)
+    return out
 
 
 class SocketServer:
@@ -13,10 +42,11 @@ class SocketServer:
     Socket.io server for broadcasting lidar and camera data to clients.
     """
 
-    def __init__(self, port=SOCKETIO_PORT, host=SOCKETIO_HOST, cors_origins=SOCKETIO_CORS_ORIGINS):
+    def __init__(self, port=SOCKETIO_PORT, host=SOCKETIO_HOST, cors_origins=SOCKETIO_CORS_ORIGINS, debug_payload=False):
         self.port = port
         self.host = host
         self.cors_origins = cors_origins
+        self.debug_payload = debug_payload
 
         self.app = Flask(__name__)
         self.app.config['SECRET_KEY'] = 'robocar-secret-key'
@@ -47,10 +77,13 @@ class SocketServer:
 
             print(f"[SocketIO] Client connected: {sid} ({len(self.clients)} clients)")
 
-            emit('status', {
+            status_payload = {
                 'message': 'Connected to robocar sensor stream',
                 'connected': True
-            })
+            }
+            if self.debug_payload:
+                print(f"[SocketIO] [debug] emit status: {json.dumps(status_payload, indent=2)}")
+            emit('status', status_payload)
 
         @self.socketio.on('disconnect')
         def handle_disconnect():
@@ -61,7 +94,10 @@ class SocketServer:
 
         @self.socketio.on('ping')
         def handle_ping():
-            emit('pong', {'timestamp': self.socketio.server.eio.get_time()})
+            pong_payload = {'timestamp': self.socketio.server.eio.get_time()}
+            if self.debug_payload:
+                print(f"[SocketIO] [debug] emit pong: {json.dumps(pong_payload, indent=2)}")
+            emit('pong', pong_payload)
 
     def start(self):
         """Start the socket server in a separate thread."""
@@ -79,8 +115,7 @@ class SocketServer:
                     host=self.host,
                     port=self.port,
                     debug=False,
-                    use_reloader=False,
-                    allow_unsafe_werkzeug=True
+                    use_reloader=False
                 )
             except Exception as e:
                 print(f"[SocketIO] Server error: {e}")
@@ -99,16 +134,21 @@ class SocketServer:
 
         self.running = False
         try:
-            self.socketio.stop()
+            with self.app.test_request_context():
+                self.socketio.stop()
         except Exception as e:
-            print(f"[SocketIO] Error stopping server: {e}")
-
+            msg = str(e).lower()
+            if "request context" not in msg and "application context" not in msg and "unknown web server" not in msg:
+                print(f"[SocketIO] Error stopping server: {e}")
         print("[SocketIO] Server stopped")
 
     def emit_sensor_data(self, data):
         """Emit sensor data to all connected clients."""
         if self.running:
             try:
+                if self.debug_payload:
+                    summarized = _payload_for_debug(data)
+                    print(f"[SocketIO] [debug] emit sensor_data (résumé console; les clients reçoivent les données complètes):\n{json.dumps(summarized, indent=2)}")
                 self.socketio.emit('sensor_data', data)
             except Exception as e:
                 print(f"[SocketIO] Error emitting sensor_data: {e}")
@@ -117,6 +157,8 @@ class SocketServer:
         """Emit status information to all connected clients."""
         if self.running:
             try:
+                if self.debug_payload:
+                    print(f"[SocketIO] [debug] emit status:\n{json.dumps(status, indent=2)}")
                 self.socketio.emit('status', status)
             except Exception as e:
                 print(f"[SocketIO] Error emitting status: {e}")
