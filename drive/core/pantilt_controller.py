@@ -7,7 +7,7 @@ import serial
 from .config import (
     PAN_TILT_SERIAL_PORT, PAN_TILT_BAUDRATE,
     PAN_MIN, PAN_MAX, TILT_MIN, TILT_MAX,
-    PAN_TILT_STEP_SIZE, PAN_TILT_SEND_HZ
+    PAN_TILT_STEP_SIZE, PAN_TILT_SEND_HZ, PAN_TILT_DEADZONE
 )
 
 
@@ -135,6 +135,34 @@ class PanTiltController:
         if (new_pan != self.pan_position or new_tilt != self.tilt_position) and now >= self.next_send:
             self.pan_position = new_pan
             self.tilt_position = new_tilt
+            self._send_position(self.pan_position, self.tilt_position)
+            self.next_send = now + self.send_interval
+    
+    def set_analog_position(self, pan_value, tilt_value):
+        """
+        Set pan/tilt position directly from analog stick values (like control.py).
+        Applies deadzone and sends values directly to Arduino.
+        
+        Args:
+            pan_value: Raw pan axis value (-1.0 to 1.0).
+            tilt_value: Raw tilt axis value (-1.0 to 1.0).
+        """
+        if not self._initialized:
+            return
+        
+        # Apply deadzone (like control.py)
+        pan = 0.0 if abs(pan_value) < PAN_TILT_DEADZONE else pan_value
+        tilt = 0.0 if abs(tilt_value) < PAN_TILT_DEADZONE else tilt_value
+        
+        # Apply limits
+        pan = max(self.pan_min, min(self.pan_max, pan))
+        tilt = max(self.tilt_min, min(self.tilt_max, tilt))
+        
+        # Send at the configured frequency (like control.py) - always send, even if 0
+        now = time.monotonic()
+        if now >= self.next_send:
+            self.pan_position = pan
+            self.tilt_position = tilt
             self._send_position(self.pan_position, self.tilt_position)
             self.next_send = now + self.send_interval
     

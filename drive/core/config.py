@@ -112,3 +112,4 @@ TILT_MIN = -1.0  # Minimum tilt position
 TILT_MAX = 1.0   # Maximum tilt position
 PAN_TILT_STEP_SIZE = 0.05  # Step size for discrete movement
 PAN_TILT_SEND_HZ = 20  # Serial communication frequency
+PAN_TILT_DEADZONE = 0.08  # Deadzone for analog stick input
