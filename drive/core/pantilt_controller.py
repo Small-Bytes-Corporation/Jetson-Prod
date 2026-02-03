@@ -101,35 +101,51 @@ class PanTiltController:
     
     def update(self, pan_delta, tilt_delta):
         """
-        Update with discrete steps (Arrow keys).
+        Update pan/tilt from discrete inputs (Arrow keys).
         
         Args:
-            pan_delta: Change in Pan SPEED.
-            tilt_delta: Change in Tilt POSITION.
+            pan_delta:  -1 (Left), 0 (None), 1 (Right).
+            tilt_delta: -1 (Down), 0 (None), 1 (Up).
         """
         if not self._initialized:
             return
         
-        # Apply step size
-        pan_change = pan_delta * self.step_size
+        # --- GESTION DU TILT (POSITION - AXE Y) ---
+        # On AJOUTE la variation à la position actuelle (pour que la tête monte/descende et reste là)
         tilt_change = tilt_delta * self.step_size
-        
-        # Update State
-        # Pour le Pan, les flèches augmentent/diminuent la vitesse de rotation
-        self.current_pan_speed += pan_change
-        # Pour le Tilt, les flèches changent l'angle de vue
         self.current_tilt_pos += tilt_change
         
-        # Apply limits
-        self.current_pan_speed = max(self.pan_min, min(self.pan_max, self.current_pan_speed))
+        # Limites Tilt
         self.current_tilt_pos = max(self.tilt_min, min(self.tilt_max, self.current_tilt_pos))
         
-        # Send update if rate limit allows
+        
+        # --- GESTION DU PAN (VITESSE - AXE X) ---
+        # ICI ON CHANGE LA LOGIQUE :
+        # Au lieu d'ajouter (+/-), on DÉFINIT la vitesse directement.
+        
+        if pan_delta != 0:
+            # Si on appuie sur une flèche, on met une vitesse fixe (ex: 50% de la vitesse max)
+            # pan_delta est soit 1.0 soit -1.0 (ou 0.0)
+            # On utilise 0.5 pour ne pas tourner trop vite avec le clavier, ou 1.0 pour fond.
+            VITESSE_CLAVIER = 0.6 
+            
+            if pan_delta > 0:
+                self.current_pan_speed = VITESSE_CLAVIER  # Tourne à Droite
+            else:
+                self.current_pan_speed = -VITESSE_CLAVIER # Tourne à Gauche
+        else:
+            # Si aucune touche Pan n'est enfoncée, ON STOPPE NET
+            self.current_pan_speed = 0.0
+
+        # Limites Pan (Sécurité)
+        self.current_pan_speed = max(self.pan_min, min(self.pan_max, self.current_pan_speed))
+        
+        
+        # --- ENVOI A L'ARDUINO ---
         now = time.monotonic()
         if now >= self.next_send:
             self._send_command(self.current_pan_speed, self.current_tilt_pos)
             self.next_send = now + self.send_interval
-    
     def set_analog_position(self, pan_axis, tilt_axis):
         """
         Set directly from Joystick.
