@@ -3,7 +3,6 @@ Motor controller for VESC motor management.
 """
 
 import time
-import threading
 from pyvesc import VESC
 from .config import DEFAULT_SERIAL_PORT
 
@@ -26,13 +25,13 @@ class MotorController:
         self.motor = None
         self._initialized = False
     
-    def initialize(self, max_retries=5, timeout=3):
+    def initialize(self, attempts=5, delay=1.0):
         """
-        Initialize the VESC motor with retry logic and timeout.
+        Initialize the VESC motor with retry logic.
         
         Args:
-            max_retries: Maximum number of initialization attempts.
-            timeout: Timeout in seconds for each initialization attempt.
+            attempts: Maximum number of initialization attempts.
+            delay: Delay in seconds between attempts.
             
         Returns:
             bool: True if initialization successful, False otherwise.
@@ -45,56 +44,24 @@ class MotorController:
             self._initialized = True
             return True
         
-        def init_vesc():
-            """Initialize VESC in a separate thread."""
+        for i in range(attempts):
             try:
                 motor = VESC(serial_port=self.serial_port)
                 version = motor.get_firmware_version()
-                return motor, version
-            except Exception as e:
-                raise e
-        
-        for attempt in range(max_retries):
-            try:
-                result = [None]
-                exception = [None]
-                
-                def target():
-                    try:
-                        motor, version = init_vesc()
-                        result[0] = (motor, version)
-                    except Exception as e:
-                        exception[0] = e
-                
-                thread = threading.Thread(target=target)
-                thread.daemon = True
-                thread.start()
-                thread.join(timeout=timeout)
-                
-                if thread.is_alive():
-                    print(f"[Motor] Init timeout (try {attempt+1}/{max_retries}): VESC connection took longer than {timeout}s")
-                    if attempt < max_retries - 1:
-                        time.sleep(1)
-                    continue
-                
-                if exception[0]:
-                    raise exception[0]
-                
-                if result[0]:
-                    self.motor, version = result[0]
-                    if version:
-                        print(f"[Motor] Firmware version: {version}")
-                    else:
-                        print("[Motor] Warning: Firmware version is None")
+                if version is not None:
+                    print(f"⚙️ VESC connecté (firmware OK): {version}")
+                    self.motor = motor
                     self._initialized = True
                     return True
-                    
+                else:
+                    print(f"⚠️ VESC réponse invalide (try {i+1}/{attempts})")
             except Exception as e:
-                print(f"[Motor] Init failed (try {attempt+1}/{max_retries}): {e}")
-                if attempt < max_retries - 1:
-                    time.sleep(1)
+                print(f"❌ Erreur VESC (try {i+1}/{attempts}): {e}")
+            
+            if i < attempts - 1:
+                time.sleep(delay)
         
-        raise RuntimeError(f"Failed to initialize VESC after {max_retries} attempts.")
+        raise RuntimeError("🛑 Échec initialisation VESC après plusieurs tentatives.")
     
     def set_commands(self, acceleration, steering):
         """
