@@ -122,17 +122,34 @@ class ManualDriveApp:
             print("[ManualDrive] Initializing controllers...")
             
             if self.use_motor and self.motor is not None:
-                self.motor.initialize()
+                try:
+                    self.motor.initialize()
+                except Exception as e:
+                    print(f"[ManualDrive] Warning: Failed to initialize motor: {e}")
+                    print("[ManualDrive] Motor will be disabled")
+                    self.motor = None
+                    self.use_motor = False
             elif not self.use_motor:
                 print("[ManualDrive] Motor disabled")
             
             if self.use_joystick and self.joystick is not None:
-                self.joystick.initialize()
+                try:
+                    self.joystick.initialize()
+                except Exception as e:
+                    print(f"[ManualDrive] Warning: Failed to initialize joystick: {e}")
+                    print("[ManualDrive] Joystick will be disabled")
+                    self.joystick = None
+                    self.use_joystick = False
             elif not self.use_joystick:
                 print("[ManualDrive] Joystick disabled")
             
             if self.use_camera and self.camera is not None:
-                self.camera.initialize()
+                try:
+                    self.camera.initialize()
+                except Exception as e:
+                    print(f"[ManualDrive] Warning: Failed to initialize camera: {e}")
+                    self.camera = None
+                    self.use_camera = False
             
             if self.use_lidar and self.lidar is not None:
                 try:
@@ -150,10 +167,13 @@ class ManualDriveApp:
             
             # Start socket server and data publisher if enabled
             if self.enable_socket and self.socket_server is not None:
-                self.socket_server.start()
-                if self.data_publisher is not None:
-                    self.data_publisher.start()
-                print(f"[ManualDrive] Socket.io server running on port {self.socket_server.port}")
+                try:
+                    self.socket_server.start()
+                    if self.data_publisher is not None:
+                        self.data_publisher.start()
+                    print(f"[ManualDrive] Socket.io server running on port {self.socket_server.port}")
+                except Exception as e:
+                    print(f"[ManualDrive] Warning: Failed to start socket server: {e}")
             
             print("[ManualDrive] Ready! Use BACK+START to exit.")
             
