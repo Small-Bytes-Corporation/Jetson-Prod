@@ -33,9 +33,14 @@ class PanTiltController:
         
         self.serial_conn = None
         
-        # State variables
-        self.current_pan_speed = 0.0   # Vitesse actuelle du Pan (-1 à 1)
-        self.current_tilt_pos = 0.0    # Position actuelle du Tilt (-1 à 1)
+        # --- ETAT INTERNE ---
+        self.current_pan_speed = 0.0   # Vitesse envoyée à l'Arduino
+        self.current_tilt_pos = 0.0    # Position envoyée à l'Arduino
+        
+        # --- MEMOIRE DU JOYSTICK ---
+        # On sauvegarde la dernière valeur connue du joystick 
+        # pour que le clavier puisse "retomber" dessus quand on lâche les touches.
+        self.joy_pan_memory = 0.0
         
         self._initialized = False
         
@@ -61,10 +66,9 @@ class PanTiltController:
             )
             print(f"[PanTilt] Serial connection opened on {self.serial_port}")
             
-            # Wait for Arduino reboot
             time.sleep(2)
             
-            # Reset: Pan STOP (0 speed), Tilt HORIZON (0 position)
+            # Reset
             print("[PanTilt] Resetting camera to center/stop...")
             for _ in range(5):
                 self._send_command(0.0, 0.0)
@@ -72,6 +76,8 @@ class PanTiltController:
             
             self.current_pan_speed = 0.0
             self.current_tilt_pos = 0.0
+            self.joy_pan_memory = 0.0
+            
             self._initialized = True
             print("[PanTilt] Initialized.")
             
@@ -79,21 +85,12 @@ class PanTiltController:
             raise RuntimeError(f"Failed to initialize pan/tilt controller: {e}")
     
     def _send_command(self, pan_speed, tilt_pos):
-        """
-        Send command to Arduino.
-        Args:
-            pan_speed: Speed for continuous servo (-1.0 to 1.0).
-            tilt_pos: Angle for positional servo (-1.0 to 1.0).
-        """
         if not self.enabled or self.serial_conn is None:
             return
         
         try:
-            # Format: "PAN_SPEED,TILT_POS\n"
             msg = f"{pan_speed:.2f},{tilt_pos:.2f}\n".encode('ascii')
             self.serial_conn.write(msg)
-            
-            # Clear input buffer to avoid lag
             if self.serial_conn.in_waiting:
                 self.serial_conn.read(self.serial_conn.in_waiting)
         except Exception as e:
@@ -101,100 +98,94 @@ class PanTiltController:
     
     def update(self, pan_delta, tilt_delta):
         """
-        Update pan/tilt from discrete inputs (Arrow keys).
-        
-        Args:
-            pan_delta:  -1 (Left), 0 (None), 1 (Right).
-            tilt_delta: -1 (Down), 0 (None), 1 (Up).
+        Gère les entrées CLAVIER (Discret : -1, 0, 1).
+        Appelé en boucle par le système.
         """
         if not self._initialized:
             return
         
-        # --- GESTION DU TILT (POSITION - AXE Y) ---
-        # On AJOUTE la variation à la position actuelle (pour que la tête monte/descende et reste là)
+        # --- 1. GESTION TILT (POSITION - AXE Y) ---
+        # Le clavier ajoute/enlève de l'angle
         tilt_change = tilt_delta * self.step_size
         self.current_tilt_pos += tilt_change
-        
-        # Limites Tilt
         self.current_tilt_pos = max(self.tilt_min, min(self.tilt_max, self.current_tilt_pos))
         
         
-        # --- GESTION DU PAN (VITESSE - AXE X) ---
-        # ICI ON CHANGE LA LOGIQUE :
-        # Au lieu d'ajouter (+/-), on DÉFINIT la vitesse directement.
+        # --- 2. GESTION PAN (VITESSE - AXE X) ---
         
         if pan_delta != 0:
-            # Si on appuie sur une flèche, on met une vitesse fixe (ex: 50% de la vitesse max)
-            # pan_delta est soit 1.0 soit -1.0 (ou 0.0)
-            # On utilise 0.5 pour ne pas tourner trop vite avec le clavier, ou 1.0 pour fond.
+            # CAS A : UNE TOUCHE EST ENFONCÉE
+            # Le clavier est prioritaire. On impose une vitesse fixe.
             VITESSE_CLAVIER = 0.6 
             
             if pan_delta > 0:
-                self.current_pan_speed = VITESSE_CLAVIER  # Tourne à Droite
+                self.current_pan_speed = VITESSE_CLAVIER
             else:
-                self.current_pan_speed = -VITESSE_CLAVIER # Tourne à Gauche
+                self.current_pan_speed = -VITESSE_CLAVIER
+                
         else:
-            # Si aucune touche Pan n'est enfoncée, ON STOPPE NET
-            self.current_pan_speed = 0.0
+            # CAS B : AUCUNE TOUCHE CLAVIER
+            # Au lieu de forcer 0.0, on utilise la valeur du JOYSTICK !
+            # Si le joystick est au centre, joy_pan_memory vaut 0, donc ça s'arrête.
+            # Si le joystick est poussé, ça continue de tourner.
+            self.current_pan_speed = self.joy_pan_memory
 
-        # Limites Pan (Sécurité)
+        # Sécurité Limites
         self.current_pan_speed = max(self.pan_min, min(self.pan_max, self.current_pan_speed))
         
         
-        # --- ENVOI A L'ARDUINO ---
+        # --- ENVOI ---
         now = time.monotonic()
         if now >= self.next_send:
             self._send_command(self.current_pan_speed, self.current_tilt_pos)
             self.next_send = now + self.send_interval
+    
     def set_analog_position(self, pan_axis, tilt_axis):
         """
-        Set directly from Joystick.
-        
-        Args:
-            pan_axis: Joystick X value (-1 to 1). Maps to SPEED.
-            tilt_axis: Joystick Y value (-1 to 1). Maps to POSITION.
+        Gère les entrées JOYSTICK (Analogique : -1.0 à 1.0).
         """
         if not self._initialized:
             return
         
-        # Apply deadzone
+        # 1. Application Deadzone
         pan = 0.0 if abs(pan_axis) < PAN_TILT_DEADZONE else pan_axis
         tilt = 0.0 if abs(tilt_axis) < PAN_TILT_DEADZONE else tilt_axis
         
-        # Limits
+        # 2. Limites
         pan = max(self.pan_min, min(self.pan_max, pan))
         tilt = max(self.tilt_min, min(self.tilt_max, tilt))
         
-        # Update internal state so get_position() is accurate
-        self.current_pan_speed = pan
-        self.current_tilt_pos = tilt
+        # 3. MISE A JOUR TILT (Position Absolue)
+        # Si le stick bouge, il prend le contrôle de la position
+        if abs(tilt) > 0.0:
+            self.current_tilt_pos = tilt
+            # Note : Si tu lâches le stick Tilt, il revient à 0 (Horizon). 
+            # C'est le comportement normal d'un joystick positionnel.
         
-        # Always send (to ensure smooth movement and immediate stop)
+        # 4. MISE A JOUR PAN (Vitesse Variable)
+        # On sauvegarde cette valeur en mémoire pour la méthode update()
+        self.joy_pan_memory = pan
+        
+        # On met à jour la vitesse actuelle
+        self.current_pan_speed = pan
+        
+        # 5. Envoi immédiat (pour réactivité joystick)
         now = time.monotonic()
         if now >= self.next_send:
             self._send_command(self.current_pan_speed, self.current_tilt_pos)
             self.next_send = now + self.send_interval
     
     def get_position(self):
-        """
-        Returns (current_pan_speed, current_tilt_position).
-        """
         return (self.current_pan_speed, self.current_tilt_pos)
     
     def stop(self):
-        """Stop motors and close connection."""
-        if not self.enabled:
-            return
-        
+        if not self.enabled: return
         if self.serial_conn is not None:
             try:
-                # Force Stop command before closing
                 self.serial_conn.write(b"0.00,0.00\n")
                 time.sleep(0.1)
                 self.serial_conn.close()
-                print("[PanTilt] Serial connection closed")
-            except Exception as e:
-                print(f"[PanTilt] Error during stop: {e}")
+            except Exception: pass
             finally:
                 self._initialized = False
                 self.serial_conn = None
