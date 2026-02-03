@@ -16,7 +16,7 @@ Le système Robocar est composé de plusieurs modules modulaires qui peuvent êt
 | Camera | `use_camera` | `False` | Contrôleur | Capture de frames caméra DepthAI |
 | Lidar | `use_lidar` | Auto | Contrôleur | Acquisition de données lidar |
 | PanTilt | `use_pan_tilt` | `True` | Contrôleur | Contrôle pan/tilt de la caméra |
-| RTK | `use_rtk` | `False` | Contrôleur | Stream RTK GNSS (pose + IMU accel/gyro) |
+| RTK | `use_rtk` | `True` | Contrôleur | Stream RTK GNSS (pose + IMU accel/gyro) |
 | Socket | `enable_socket` | `False` | Service | Serveur Socket.io pour streaming |
 
 ## Description détaillée des modules
@@ -219,9 +219,13 @@ python3 main.py --no-pan-tilt
 **Description**:
 Lit le flux Fusion Engine sur le port série de la balise Point One (Quectel LG69T) et expose en stream la dernière **pose** (position GNSS, type de solution, vitesse, ypr) et la dernière **IMU** (accéléromètre axes x,y,z en m/s², gyroscope x,y,z en rad/s). L’IMU n’est émise qu’avec le firmware SDK-AP (GNSS+IMU) ; avec SDK-AM (GNSS seul), `get_latest_imu()` restera `None`.
 
-**Flag**: `use_rtk` (éventuel, non intégré au `main.py` pour l’instant)
+**Flag**: `use_rtk` (défaut: `True`). Le module est intégré au `main.py` ; les données RTK (pose + IMU) sont publiées via Socket.io dans l'événement `sensor_data` lorsque le socket est activé.
 
-**Port série**: Configuré via `config.py` (`DEFAULT_RTK_SERIAL_PORT`, `RTK_BAUDRATE`) ou en argument du constructeur.
+**Arguments CLI**:
+- `--no-rtk`: Désactive le RTK GNSS (pose/IMU)
+- `--rtk-port PATH`: Port série pour le RTK (défaut: `DEFAULT_RTK_SERIAL_PORT` dans `config.py`)
+
+**Port série**: Configuré via `--rtk-port` ou `config.py` (`DEFAULT_RTK_SERIAL_PORT`, `RTK_BAUDRATE`).
 
 **Données exposées**:
 - `get_latest_pose()` : dict avec `lla_deg`, `solution_type`, `position_std_enu_m`, `gps_time`, `p1_time`, optionnel `ypr_deg`, `velocity_body_mps`.
@@ -229,17 +233,24 @@ Lit le flux Fusion Engine sur le port série de la balise Point One (Quectel LG6
 
 **Dépendances**:
 - `fusion-engine-client` (pip), `pyserial`
+- Optionnellement `DataPublisher` (si socket activé) pour publier pose et IMU
 
-**Exemple d’utilisation**:
+**Exemple d'utilisation**:
 ```bash
+# RTK activé par défaut avec main.py
+python3 main.py
+
+# Désactiver le RTK (tests sans GNSS)
+python3 main.py --no-rtk
+
+# Spécifier le port RTK
+python3 main.py --rtk-port /dev/ttyUSB0
+
 # Test du module RTK seul (depuis la racine du projet)
 python scripts/test_rtk.py
 
 # Test avec port série spécifique
 python scripts/test_rtk.py --port /dev/ttyUSB0
-
-# Fréquence d’affichage (Hz)
-python scripts/test_rtk.py --port /dev/ttyUSB0 --hz 5
 ```
 
 ---
@@ -251,7 +262,7 @@ python scripts/test_rtk.py --port /dev/ttyUSB0 --hz 5
 - `drive/core/data_publisher.py`
 
 **Description**:
-Serveur Socket.io pour le streaming de données en temps réel (lidar, caméra) vers des clients web ou autres applications.
+Serveur Socket.io pour le streaming de données en temps réel (lidar, caméra, RTK) vers des clients web ou autres applications. Les données RTK (pose + IMU) sont incluses dans l’événement `sensor_data` ; le statut `status` inclut `rtk_connected`. Voir [docs/PROTOCOL.md](docs/PROTOCOL.md) pour le détail du protocole (événements et formats des payloads).
 
 **Flag**: `enable_socket` (défaut: `False`)
 
@@ -264,17 +275,21 @@ Serveur Socket.io pour le streaming de données en temps réel (lidar, caméra) 
 **Dépendances**:
 - Peut utiliser `LidarController` pour publier des données lidar
 - Peut utiliser `CameraController` pour publier des frames caméra
+- Peut utiliser `RTKController` pour publier pose et IMU RTK
 
 **Exemple d'utilisation**:
 ```bash
-# Activer le serveur socket avec lidar
+# Activer le serveur socket avec lidar et RTK
 python3 main.py --enable-socket
 
 # Activer avec port personnalisé
 python3 main.py --enable-socket --socket-port 8080
 
-# Activer avec caméra et lidar
+# Activer avec caméra, lidar et RTK
 python3 main.py --enable-socket --camera --lidar-port /dev/ttyUSB0
+
+# Tests sans RTK
+python3 main.py --enable-socket --no-rtk
 ```
 
 ---
@@ -299,11 +314,13 @@ python3 main.py --enable-socket --camera --lidar-port /dev/ttyUSB0
 - `--no-camera`: Désactive la caméra
 - `--no-lidar`: Désactive le lidar
 - `--no-pan-tilt`: Désactive le pan/tilt
+- `--no-rtk`: Désactive le RTK GNSS (pose/IMU)
 
 ### Arguments de configuration de ports
 
 - `--lidar-port PATH`: Port série pour le lidar
 - `--pan-tilt-port PATH`: Port série pour le pan/tilt
+- `--rtk-port PATH`: Port série pour le RTK GNSS
 - `--socket-port INT`: Port pour le serveur Socket.io
 
 ---
@@ -328,6 +345,11 @@ python3 main.py --no-motor --no-pan-tilt --enable-socket
 ### Tests lidar uniquement
 ```bash
 python3 main.py --no-motor --no-joystick --no-throttle --lidar-port /dev/ttyUSB0 --enable-socket
+```
+
+### Tests socket sans RTK
+```bash
+python3 main.py --enable-socket --no-rtk
 ```
 
 ### Configuration personnalisée
@@ -358,6 +380,9 @@ CameraController (indépendant)
 LidarController (indépendant)
     └── DataPublisher (optionnel, si socket activé)
 
+RTKController (indépendant)
+    └── DataPublisher (optionnel, si socket activé)
+
 SocketServer (indépendant)
     └── DataPublisher (nécessite socket server)
 ```
@@ -369,9 +394,10 @@ SocketServer (indépendant)
 1. **Joystick et Throttle**: Essentiels pour le contrôle de base, mais peuvent être désactivés pour tests
 2. **Lidar**: Activé automatiquement si `--lidar-port` fourni, sauf si `--no-lidar` est spécifié
 3. **Camera**: Désactivée par défaut, doit être explicitement activée avec `--camera`
-4. **Socket**: Nécessite généralement lidar ou caméra pour publier des données utiles
+4. **Socket**: Nécessite généralement lidar, caméra ou RTK pour publier des données utiles
 5. **PanTilt**: Activé par défaut, utilise le D-pad du joystick pour le contrôle discret
 6. **Motor**: Activé par défaut, nécessite throttle et joystick pour fonctionner correctement
+7. **RTK**: Activé par défaut, désactivable avec `--no-rtk` ; données publiées dans `sensor_data` si socket activé
 
 ---
 
@@ -385,7 +411,10 @@ Les constantes de configuration peuvent être modifiées dans `drive/core/config
 - `PAN_MIN/MAX`, `TILT_MIN/MAX`: Limites pan/tilt
 - `LOOP_SLEEP_TIME`: Fréquence de la boucle principale
 - `SOCKETIO_PORT`: Port par défaut du serveur Socket.io
+- `DEFAULT_RTK_SERIAL_PORT`, `RTK_BAUDRATE`: Port et débit série RTK
 
 ---
+
+Pour le détail du protocole Socket.io (événements et payloads), voir [docs/PROTOCOL.md](docs/PROTOCOL.md).
 
 Pour plus d'informations sur l'architecture générale, voir [ARCHITECTURE.md](ARCHITECTURE.md).

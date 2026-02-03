@@ -12,12 +12,12 @@ import signal
 import pygame
 from drive.core import (
     MotorController, JoystickController, ThrottleController, CameraController,
-    LidarController, PanTiltController, SocketServer, DataPublisher
+    LidarController, PanTiltController, RTKController, SocketServer, DataPublisher
 )
 from drive.core.joystick_controller import Input, Axis
 from drive.core.config import (
     LOOP_SLEEP_TIME, DEFAULT_SERIAL_PORT, MAX_SPEED,
-    DEFAULT_LIDAR_PORT, SOCKETIO_PORT, PAN_TILT_SERIAL_PORT
+    DEFAULT_LIDAR_PORT, SOCKETIO_PORT, PAN_TILT_SERIAL_PORT, DEFAULT_RTK_SERIAL_PORT
 )
 
 
@@ -29,7 +29,8 @@ class ManualDriveApp:
     def __init__(self, max_speed=MAX_SPEED, serial_port=DEFAULT_SERIAL_PORT, 
                  use_camera=False, enable_socket=False, lidar_port=None, socket_port=SOCKETIO_PORT,
                  use_motor=True, pan_tilt_port=None, use_pan_tilt=True,
-                 use_joystick=True, use_throttle=True, use_lidar=None):
+                 use_joystick=True, use_throttle=True, use_lidar=None,
+                 rtk_port=None, use_rtk=True):
         """
         Initialize the manual drive application.
         
@@ -46,6 +47,8 @@ class ManualDriveApp:
             use_joystick: Whether to enable joystick controller. If False, joystick is disabled.
             use_throttle: Whether to enable throttle controller. If False, throttle is disabled.
             use_lidar: Whether to enable lidar. If None, auto-enabled if lidar_port is provided.
+            rtk_port: Serial port for RTK GNSS. If None, uses default from config.
+            use_rtk: Whether to enable RTK GNSS (pose/IMU). If False, RTK is disabled.
         """
         self.max_speed = max_speed
         self.serial_port = serial_port
@@ -57,6 +60,7 @@ class ManualDriveApp:
         self.use_camera = use_camera
         self.use_lidar = use_lidar if use_lidar is not None else (lidar_port is not None)
         self.use_pan_tilt = use_pan_tilt
+        self.use_rtk = use_rtk
         self.enable_socket = enable_socket
         
         # Store lidar_port for reference
@@ -72,6 +76,10 @@ class ManualDriveApp:
             serial_port=pan_tilt_port or PAN_TILT_SERIAL_PORT,
             enabled=use_pan_tilt
         ) if use_pan_tilt else None
+        self.rtk = RTKController(
+            serial_port=rtk_port or DEFAULT_RTK_SERIAL_PORT,
+            enabled=use_rtk
+        ) if use_rtk else None
         
         # Socket.io components
         self.socket_server = None
@@ -82,6 +90,7 @@ class ManualDriveApp:
             self.data_publisher = DataPublisher(
                 lidar_controller=self.lidar,
                 camera_controller=self.camera,
+                rtk_controller=self.rtk,
                 socket_server=self.socket_server
             )
         
@@ -171,6 +180,16 @@ class ManualDriveApp:
                     print(f"[ManualDrive] Warning: Failed to initialize pan/tilt: {e}")
                     self.pantilt = None
             
+            if self.use_rtk and self.rtk is not None:
+                try:
+                    self.rtk.initialize()
+                except Exception as e:
+                    print(f"[ManualDrive] Warning: Failed to initialize RTK: {e}")
+                    self.rtk = None
+                    self.use_rtk = False
+            elif not self.use_rtk:
+                print("[ManualDrive] RTK disabled")
+            
             # Start socket server and data publisher if enabled
             if self.enable_socket and self.socket_server is not None:
                 try:
@@ -256,6 +275,10 @@ class ManualDriveApp:
                         # Frame available for display/processing
                         pass
                 
+                # Update RTK (pose/IMU) if enabled
+                if self.use_rtk and self.rtk is not None:
+                    self.rtk.update()
+                
                 # Print status
                 if self.use_throttle or self.use_joystick:
                     print(f"Duty: {acceleration:.3f} | Steer: {(steering + 1) / 2:.3f}")
@@ -297,5 +320,9 @@ class ManualDriveApp:
         # Stop pan/tilt
         if self.use_pan_tilt and self.pantilt is not None:
             self.pantilt.stop()
+        
+        # Stop RTK
+        if self.rtk is not None:
+            self.rtk.stop()
         
         print("[ManualDrive] Shutdown complete.")

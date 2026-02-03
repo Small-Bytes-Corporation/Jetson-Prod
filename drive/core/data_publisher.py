@@ -11,11 +11,11 @@ from .config import PUBLISH_RATE
 
 class DataPublisher:
     """
-    Publisher that collects data from LidarController and CameraController,
+    Publisher that collects data from LidarController, CameraController, and RTKController,
     formats it according to the protocol, and publishes via SocketServer.
     """
     
-    def __init__(self, lidar_controller, camera_controller, socket_server):
+    def __init__(self, lidar_controller, camera_controller, socket_server, rtk_controller=None):
         """
         Initialize the data publisher.
         
@@ -23,9 +23,11 @@ class DataPublisher:
             lidar_controller: LidarController instance (can be None).
             camera_controller: CameraController instance (can be None).
             socket_server: SocketServer instance.
+            rtk_controller: RTKController instance (can be None).
         """
         self.lidar_controller = lidar_controller
         self.camera_controller = camera_controller
+        self.rtk_controller = rtk_controller
         self.socket_server = socket_server
         
         self.publish_thread = None
@@ -79,7 +81,7 @@ class DataPublisher:
     
     def _collect_data(self):
         """
-        Collect data from lidar and camera controllers.
+        Collect data from lidar, camera, and RTK controllers.
         
         Returns:
             dict: Formatted sensor data or None if no data available.
@@ -88,7 +90,8 @@ class DataPublisher:
         data = {
             "timestamp": timestamp,
             "lidar": None,
-            "camera": None
+            "camera": None,
+            "rtk": None
         }
         
         # Collect lidar data
@@ -118,8 +121,17 @@ class DataPublisher:
                 except Exception as e:
                     print(f"[DataPublisher] Error encoding camera frame: {e}")
         
-        # Return data if we have at least lidar or camera data
-        if data["lidar"] is not None or data["camera"] is not None:
+        # Collect RTK data (pose and IMU)
+        if self.rtk_controller is not None and self.rtk_controller.is_available():
+            pose = self.rtk_controller.get_latest_pose()
+            imu = self.rtk_controller.get_latest_imu()
+            data["rtk"] = {"pose": pose, "imu": imu}
+        
+        # Return data if we have at least lidar, camera, or RTK (with pose or imu)
+        has_rtk = data["rtk"] is not None and (
+            data["rtk"].get("pose") is not None or data["rtk"].get("imu") is not None
+        )
+        if data["lidar"] is not None or data["camera"] is not None or has_rtk:
             return data
         
         return None
@@ -137,6 +149,7 @@ class DataPublisher:
             "timestamp": timestamp,
             "lidar_connected": False,
             "camera_connected": False,
+            "rtk_connected": False,
             "clients_connected": 0
         }
         
@@ -147,6 +160,10 @@ class DataPublisher:
         # Check camera status
         if self.camera_controller is not None:
             status["camera_connected"] = self.camera_controller.is_available()
+        
+        # Check RTK status
+        if self.rtk_controller is not None:
+            status["rtk_connected"] = self.rtk_controller.is_available()
         
         # Get client count
         if self.socket_server is not None:

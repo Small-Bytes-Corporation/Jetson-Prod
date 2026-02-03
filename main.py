@@ -7,12 +7,16 @@ Usage:
                     [--enable-socket] [--lidar-port PATH] [--socket-port INT]
                     [--no-motor] [--pan-tilt-port PATH] [--no-pan-tilt]
                     [--no-joystick] [--no-throttle] [--no-lidar] [--no-camera]
+                    [--rtk-port PATH] [--no-rtk]
 """
 
 import argparse
 import sys
 from drive.applications import ManualDriveApp
-from drive.core.config import MAX_SPEED, DEFAULT_SERIAL_PORT, DEFAULT_LIDAR_PORT, SOCKETIO_PORT, PAN_TILT_SERIAL_PORT
+from drive.core.config import (
+    MAX_SPEED, DEFAULT_SERIAL_PORT, DEFAULT_LIDAR_PORT, SOCKETIO_PORT,
+    PAN_TILT_SERIAL_PORT, DEFAULT_RTK_SERIAL_PORT,
+)
 
 
 def main():
@@ -106,6 +110,19 @@ def main():
         help='Explicitly disable camera (overrides --camera flag)'
     )
     
+    parser.add_argument(
+        '--rtk-port',
+        type=str,
+        default=None,
+        help=f'Serial port for RTK GNSS (default: {DEFAULT_RTK_SERIAL_PORT})'
+    )
+    
+    parser.add_argument(
+        '--no-rtk',
+        action='store_true',
+        help='Disable RTK GNSS (pose/IMU)'
+    )
+    
     args = parser.parse_args()
     
     # Create manual drive application
@@ -130,7 +147,9 @@ def main():
             use_pan_tilt=not args.no_pan_tilt,
             use_joystick=not args.no_joystick,
             use_throttle=not args.no_throttle,
-            use_lidar=use_lidar
+            use_lidar=use_lidar,
+            rtk_port=args.rtk_port,
+            use_rtk=not args.no_rtk,
         )
         
         # Run the application
