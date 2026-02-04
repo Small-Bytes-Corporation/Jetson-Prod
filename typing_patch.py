@@ -1,12 +1,11 @@
 """
-Patch typing.TypeAlias for Python 3.9 compatibility with fusion-engine-client.
+Patch typing.TypeAlias for Python 3.9 compatibility.
 
-fusion-engine-client uses TypeAlias which was added in Python 3.10. On Python 3.9,
-we inject TypeAlias from typing_extensions into the typing module so that
-"from typing import TypeAlias" works when fusion_engine_client is loaded.
+TypeAlias was added in Python 3.10. On Python 3.9, we inject TypeAlias from
+typing_extensions into the typing module so that "from typing import TypeAlias"
+works for any dependency that requires it.
 
-Import this module at the very start of main.py, before any code that imports
-fusion_engine_client (e.g. device_discovery, rtk_controller).
+Import this module at the very start of main.py.
 """
 
 import sys

@@ -7,13 +7,10 @@ from .joystick_controller import JoystickController
 from .throttle_controller import ThrottleController
 from .camera_controller import CameraController
 from .lidar_controller import LidarController
+from .lidar_navigation import LidarNavigator
 from .pantilt_controller import PanTiltController
 from .socket_server import SocketServer
 from .data_publisher import DataPublisher
-try:
-    from .rtk_controller import RTKController
-except Exception:
-    RTKController = None
 
 __all__ = [
     "MotorController",
@@ -21,8 +18,8 @@ __all__ = [
     "ThrottleController",
     "CameraController",
     "LidarController",
+    "LidarNavigator",
     "PanTiltController",
     "SocketServer",
     "DataPublisher",
-    "RTKController",
 ]

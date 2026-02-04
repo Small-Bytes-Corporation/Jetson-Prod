@@ -1,38 +1,33 @@
 #!/usr/bin/env python3
 """
 Main entry point for the robocar control system.
-Use --list-devices to list serial ports and DepthAI cameras (Lidar, RTK, etc.).
+Use --list-devices to list serial ports and DepthAI cameras (Lidar, VESC, etc.).
 """
 
-# Must run before any fusion_engine_client import (device_discovery, rtk_controller)
 import typing_patch  # noqa: F401
 
 import argparse
 import sys
 from drive.core.config import (
     MAX_SPEED, DEFAULT_SERIAL_PORT, DEFAULT_LIDAR_PORT, SOCKETIO_PORT,
-    PAN_TILT_SERIAL_PORT, DEFAULT_RTK_SERIAL_PORT, RTK_TCP_DEFAULT_PORT,
+    PAN_TILT_SERIAL_PORT,
 )
 
 EPILOG = """
 Examples:
-  # Run manual drive (default: motor, joystick, throttle, pan/tilt, RTK)
+  # Run manual drive (default: motor, joystick, throttle, pan/tilt)
   python3 main.py
 
-  # Enable socket stream with camera (and optional lidar/RTK)
+  # Enable socket stream with camera (and optional lidar)
   python3 main.py --enable-socket --camera
   python3 main.py --enable-socket --camera --lidar-port /dev/ttyUSB0
 
-  # List devices (identify Lidar, RTK, DepthAI cameras)
+  # List devices (identify Lidar, VESC, DepthAI cameras)
   python3 main.py --list-devices
   python3 main.py --list-devices --no-probe   # USB only, no protocol probe
 
   # Test without motor or pan/tilt
   python3 main.py --no-motor --no-pan-tilt --enable-socket
-
-  # RTK with valid fix (Polaris): run init_rtk with --tcp, then main with --rtk-tcp
-  # Terminal 1: python3 scripts/init_rtk.py --tcp 30201
-  # Terminal 2: python3 main.py --enable-socket --rtk-tcp localhost:30201
 """
 
 
@@ -101,11 +96,6 @@ def main():
         action="store_true",
         help="Disable pan/tilt control",
     )
-    disable.add_argument(
-        "--no-rtk",
-        action="store_true",
-        help="Disable RTK GNSS (pose/IMU)",
-    )
 
     ports = parser.add_argument_group("Ports")
     ports.add_argument(
@@ -119,19 +109,6 @@ def main():
         type=str,
         default=None,
         help=f"Serial port for pan/tilt controller (default: {PAN_TILT_SERIAL_PORT})",
-    )
-    ports.add_argument(
-        "--rtk-port",
-        type=str,
-        default=None,
-        help=f"Serial port for RTK GNSS (default: {DEFAULT_RTK_SERIAL_PORT})",
-    )
-    ports.add_argument(
-        "--rtk-tcp",
-        type=str,
-        default=None,
-        metavar="HOST:PORT",
-        help="Connect to p1-runner TCP output for RTK (e.g. localhost:30201). Run init_rtk with --tcp first.",
     )
     ports.add_argument(
         "--socket-port",
@@ -151,7 +128,7 @@ def main():
     tools.add_argument(
         "--list-devices",
         action="store_true",
-        help="List serial ports and DepthAI cameras with identification (Lidar, RTK, etc.) then exit",
+        help="List serial ports and DepthAI cameras with identification (Lidar, VESC, etc.) then exit",
     )
     tools.add_argument(
         "--no-probe",
@@ -174,22 +151,6 @@ def main():
     if lidar_port is None and args.enable_socket and not args.no_lidar:
         lidar_port = DEFAULT_LIDAR_PORT
     
-    # Resolve rtk_port: CLI > config fallback
-    rtk_port = args.rtk_port or DEFAULT_RTK_SERIAL_PORT
-    # Parse --rtk-tcp HOST:PORT for p1-runner connection (valid RTK fix with Polaris)
-    rtk_tcp_host = None
-    rtk_tcp_port = None
-    if args.rtk_tcp:
-        parts = args.rtk_tcp.split(":")
-        if len(parts) == 2:
-            rtk_tcp_host, rtk_tcp_port = parts[0], int(parts[1])
-        elif len(parts) == 1 and parts[0].isdigit():
-            rtk_tcp_host = "localhost"
-            rtk_tcp_port = int(parts[0])
-        else:
-            rtk_tcp_host = args.rtk_tcp
-            rtk_tcp_port = RTK_TCP_DEFAULT_PORT
-    
     # Resolve serial_port (VESC): CLI > config fallback
     serial_port = args.serial_port
     
@@ -210,8 +171,6 @@ def main():
         print("[Main] Caméra DepthAI détectée, activation pour le stream socket.")
     if use_camera:
         print(f"[Main] Utilisation de la première caméra DepthAI disponible")
-    if rtk_tcp_host:
-        print(f"[Main] RTK via TCP {rtk_tcp_host}:{rtk_tcp_port} (p1-runner Polaris - solution valide attendue)")
     
     # Create manual drive application
     try:
@@ -231,10 +190,6 @@ def main():
             use_joystick=not args.no_joystick,
             use_throttle=not args.no_throttle,
             use_lidar=use_lidar,
-            rtk_port=rtk_port,
-            use_rtk=not args.no_rtk,
-            rtk_tcp_host=rtk_tcp_host,
-            rtk_tcp_port=rtk_tcp_port,
         )
         
         # Run the application

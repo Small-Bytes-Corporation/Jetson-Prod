@@ -1,6 +1,6 @@
 # Protocole Socket (Socket.io)
 
-Ce document décrit le protocole Socket.io utilisé par le serveur Robocar pour diffuser les données des capteurs (lidar, caméra, RTK) et le statut des connexions.
+Ce document décrit le protocole Socket.io utilisé par le serveur Robocar pour diffuser les données de la caméra et le statut des connexions.
 
 ## Vue d'ensemble
 
@@ -10,19 +10,12 @@ Lorsque `--enable-socket` est activé, le serveur écoute sur le port configuré
 
 ### `sensor_data`
 
-Payload envoyé périodiquement avec les données des capteurs.
+Payload envoyé périodiquement avec les données de la caméra.
 
 | Champ      | Type   | Description |
 |-----------|--------|-------------|
 | `timestamp` | number | Timestamp Unix (secondes) au moment de la collecte |
-| `lidar`   | object \| null | Données lidar (voir ci-dessous) ou `null` si non disponible |
 | `camera`  | object \| null | Données caméra (voir ci-dessous) ou `null` si non disponible |
-| `rtk`     | object \| null | Données RTK GNSS (pose + IMU) ou `null` si non disponible |
-
-**Structure de `lidar`** (si présent):
-
-- `points`: tableau des points du scan
-- `scan_complete`: booléen
 
 **Structure de `camera`** (si présent):
 
@@ -30,23 +23,7 @@ Payload envoyé périodiquement avec les données des capteurs.
 - `width`, `height`: dimensions en pixels
 - `format`: `"jpeg"`
 
-**Structure de `rtk`** (si présent):
-
-- `pose`: objet ou `null` — dernière pose GNSS (champs optionnels selon le message Fusion Engine):
-  - `lla_deg`: [lat, lon, alt] en degrés / mètres
-  - `solution_type`: type de solution (ex: nom d’énumération)
-  - `solution_stale`: (optionnel) true si Invalid/NaN — dernière pose valide utilisée
-  - `position_std_enu_m`: écart-type position ENU [e, n, u] en mètres
-  - `gps_time`: temps GPS
-  - `p1_time`: temps Point One
-  - `ypr_deg`: [yaw, pitch, roll] en degrés
-  - `velocity_body_mps`: vitesse corps [vx, vy, vz] en m/s
-- `imu`: objet ou `null` — dernière mesure IMU (champs optionnels):
-  - `accel_xyz`: accélération [ax, ay, az] en m/s²
-  - `gyro_xyz`: vitesse angulaire [gx, gy, gz] en rad/s
-  - `p1_time`: temps Point One
-
-Les données sont émises dès qu’au moins un capteur est disponible (initialisé). Si aucun capteur n’a encore produit de données (ex. lidar en attente du premier tour complet 360°), le payload contient `lidar: null`, `camera: null`, `rtk: null` avec un `timestamp`. Le lidar LD19/D500 ne produit des points qu’après détection d’un scan complet (premier tour ~1–2 s).
+Les données sont émises dès que la caméra est disponible (initialisée). Si la caméra n'a pas encore produit de données, le payload contient `camera: null` avec un `timestamp`.
 
 ### `status`
 
@@ -55,9 +32,7 @@ Payload envoyé périodiquement avec l’état des périphériques et des client
 | Champ               | Type    | Description |
 |---------------------|---------|-------------|
 | `timestamp`          | number  | Timestamp Unix (secondes) |
-| `lidar_connected`   | boolean | Lidar initialisé et disponible |
 | `camera_connected`  | boolean | Caméra initialisée et disponible |
-| `rtk_connected`     | boolean | RTK GNSS initialisé et disponible |
 | `clients_connected` | number  | Nombre de clients Socket.io connectés |
 
 ### À la connexion
@@ -66,41 +41,18 @@ Lorsqu’un client se connecte, le serveur envoie immédiatement un événement 
 
 ## Format JSON exact
 
-Chaque bloc (`lidar`, `camera`, `rtk`) peut être `null` si la source n’est pas disponible ou désactivée.
+Le bloc `camera` peut être `null` si la source n’est pas disponible ou désactivée.
 
 ### Exemple `sensor_data`
 
 ```json
 {
   "timestamp": 1234567890.123,
-  "lidar": {
-    "points": [
-      { "angle": 0.0, "distance": 1.5, "intensity": 120 },
-      { "angle": 1.2, "distance": 2.3, "intensity": 150 }
-    ],
-    "scan_complete": true
-  },
   "camera": {
     "frame": "/9j/4AAQSkZJRg...",
     "width": 320,
     "height": 180,
     "format": "jpeg"
-  },
-  "rtk": {
-    "pose": {
-      "lla_deg": [48.8566, 2.3522, 100.0],
-      "solution_type": "RTK_FIX",
-      "position_std_enu_m": [0.01, 0.01, 0.02],
-      "gps_time": 1234567890.5,
-      "p1_time": 1234567890.5,
-      "ypr_deg": [0.1, -0.05, 0.0],
-      "velocity_body_mps": [1.0, 0.0, 0.0]
-    },
-    "imu": {
-      "accel_xyz": [0.1, 0.0, 9.81],
-      "gyro_xyz": [0.001, 0.002, 0.0],
-      "p1_time": 1234567890.5
-    }
   }
 }
 ```
@@ -123,9 +75,7 @@ Envoyé à la fréquence de publication (`PUBLISH_RATE`), avec l’état des pé
 ```json
 {
   "timestamp": 1234567890.123,
-  "lidar_connected": true,
   "camera_connected": true,
-  "rtk_connected": true,
   "clients_connected": 2
 }
 ```
@@ -142,4 +92,3 @@ Envoyé à la fréquence de publication (`PUBLISH_RATE`), avec l’état des pé
 
 - Serveur: [drive/core/socket_server.py](../drive/core/socket_server.py)
 - Collecte et format des données: [drive/core/data_publisher.py](../drive/core/data_publisher.py)
-- Structure pose/IMU RTK: [drive/core/rtk_controller.py](../drive/core/rtk_controller.py)

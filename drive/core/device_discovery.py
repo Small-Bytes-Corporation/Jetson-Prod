@@ -1,5 +1,5 @@
 """
-Device discovery: identify which serial port is Lidar, RTK, camera (DepthAI), etc.
+Device discovery: identify which serial port is Lidar, VESC, Pan/Tilt, camera (DepthAI), etc.
 Uses USB info (by-id, sysfs) and optional protocol probing.
 """
 
@@ -10,7 +10,6 @@ import time
 from .config import (
     IS_LINUX,
     LIDAR_BAUDRATE,
-    RTK_BAUDRATE,
     _get_available_serial_ports,
 )
 
@@ -19,12 +18,6 @@ try:
     _SERIAL_AVAILABLE = True
 except ImportError:
     _SERIAL_AVAILABLE = False
-
-try:
-    from fusion_engine_client.parsers.decoder import FusionEngineDecoder
-    _FUSION_ENGINE_AVAILABLE = True
-except ImportError:
-    _FUSION_ENGINE_AVAILABLE = False
 
 _VESC_AVAILABLE = False  # Will be set to True in _probe_vesc if available
 
@@ -104,30 +97,6 @@ def _probe_lidar(port_path, read_duration=0.2):
     return False
 
 
-def _probe_rtk(port_path, read_duration=0.3):
-    """
-    Open port at RTK_BAUDRATE, read for read_duration seconds, try to decode Fusion Engine messages.
-    Returns True if at least one valid message is decoded.
-    """
-    if not _SERIAL_AVAILABLE or not _FUSION_ENGINE_AVAILABLE:
-        return False
-    try:
-        decoder = FusionEngineDecoder(warn_on_error=False)
-        with serial.Serial(port=port_path, baudrate=RTK_BAUDRATE, timeout=0.1) as ser:
-            deadline = time.monotonic() + read_duration
-            while time.monotonic() < deadline:
-                if ser.in_waiting:
-                    chunk = ser.read(ser.in_waiting)
-                    results = decoder.on_data(chunk)
-                    for r in results:
-                        if len(r) >= 2:
-                            return True
-                time.sleep(0.02)
-    except Exception:
-        pass
-    return False
-
-
 def _probe_vesc(port_path, timeout=2.0):
     """
     Try to connect to VESC and get firmware version.
@@ -172,10 +141,6 @@ def _identify_by_usb_info(usb_info, by_id):
     product = (usb_info.get("product") or "").lower()
     by_id_lower = (by_id or "").lower()
     
-    # RTK GNSS - Silicon Labs CP2105
-    if "silicon" in manufacturer or "cp2105" in product or "cp2105" in by_id_lower:
-        return "RTK GNSS (Point One / Fusion Engine)"
-    
     # Arduino - typically Pan/Tilt controller
     if "arduino" in manufacturer or "arduino" in product or "arduino" in by_id_lower:
         return "Pan/Tilt (Arduino)"
@@ -206,8 +171,6 @@ def get_serial_port_info(port_path, probe=True):
         # Protocol probing (slower, requires exclusive port access)
         if _probe_lidar(port_path):
             info["probable"] = "Lidar (D500/LD19)"
-        elif _probe_rtk(port_path):
-            info["probable"] = "RTK GNSS (Point One / Fusion Engine)"
         elif _probe_vesc(port_path):
             info["probable"] = "VESC (STMicroelectronics)"
         elif usb_identified:
@@ -226,8 +189,8 @@ def get_serial_port_info(port_path, probe=True):
 
 def get_detected_port_mapping(probe=True):
     """
-    Identify which serial port is Lidar, RTK, VESC, Pan/Tilt, etc. via probe (or USB info only if probe=False).
-    Returns a dict with keys "lidar", "rtk", "vesc", "pan_tilt" -> port path.
+    Identify which serial port is Lidar, VESC, Pan/Tilt, etc. via probe (or USB info only if probe=False).
+    Returns a dict with keys "lidar", "vesc", "pan_tilt" -> port path.
     Only includes keys for device types that were detected.
     """
     results = list_devices(probe=probe, verbose=False)
@@ -239,8 +202,6 @@ def get_detected_port_mapping(probe=True):
             continue
         if probable == "Lidar (D500/LD19)":
             mapping["lidar"] = path
-        elif probable == "RTK GNSS (Point One / Fusion Engine)":
-            mapping["rtk"] = path
         elif probable == "VESC (STMicroelectronics)":
             mapping["vesc"] = path
         elif probable == "Pan/Tilt (Arduino)":
@@ -289,7 +250,7 @@ def list_devices(probe=True, verbose=True):
     results = {"serial": [], "camera": []}
 
     if verbose:
-        print("=== Périphériques série (Lidar, RTK, VESC, Pan/Tilt) ===\n")
+        print("=== Périphériques série (Lidar, VESC, Pan/Tilt) ===\n")
         if not ports:
             print("  Aucun port série trouvé (/dev/ttyUSB*, /dev/ttyACM*).\n")
 

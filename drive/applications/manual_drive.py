@@ -8,17 +8,15 @@ os.environ["SDL_VIDEODRIVER"] = "dummy"
 
 import sys
 import time
-import signal
 import pygame
 from drive.core import (
     MotorController, JoystickController, ThrottleController, CameraController,
-    LidarController, PanTiltController, RTKController, SocketServer, DataPublisher
+    LidarController, LidarNavigator, PanTiltController, SocketServer, DataPublisher
 )
 from drive.core.joystick_controller import Input, Axis
 from drive.core.config import (
     LOOP_SLEEP_TIME, DEFAULT_SERIAL_PORT, MAX_SPEED,
-    DEFAULT_LIDAR_PORT, SOCKETIO_PORT, PAN_TILT_SERIAL_PORT, DEFAULT_RTK_SERIAL_PORT,
-    RTK_TCP_DEFAULT_PORT,
+    DEFAULT_LIDAR_PORT, SOCKETIO_PORT, PAN_TILT_SERIAL_PORT,
 )
 
 
@@ -31,8 +29,7 @@ class ManualDriveApp:
                  use_camera=False, enable_socket=False, lidar_port=None, socket_port=SOCKETIO_PORT,
                  socket_debug=False,
                  use_motor=True, pan_tilt_port=None, use_pan_tilt=True,
-                 use_joystick=True, use_throttle=True, use_lidar=None,
-                 rtk_port=None, use_rtk=True, rtk_tcp_host=None, rtk_tcp_port=None):
+                 use_joystick=True, use_throttle=True, use_lidar=None):
         """
         Initialize the manual drive application.
         
@@ -50,10 +47,6 @@ class ManualDriveApp:
             use_joystick: Whether to enable joystick controller. If False, joystick is disabled.
             use_throttle: Whether to enable throttle controller. If False, throttle is disabled.
             use_lidar: Whether to enable lidar. If None, auto-enabled if lidar_port is provided.
-            rtk_port: Serial port for RTK GNSS. If None, uses default from config.
-            use_rtk: Whether to enable RTK GNSS (pose/IMU). If False, RTK is disabled.
-            rtk_tcp_host: TCP host for RTK (e.g. 'localhost') when using p1-runner --tcp. Enables valid RTK fix.
-            rtk_tcp_port: TCP port for RTK when rtk_tcp_host is set (default 30201).
         """
         self.max_speed = max_speed
         self.serial_port = serial_port
@@ -65,19 +58,12 @@ class ManualDriveApp:
         self.use_camera = use_camera
         self.use_lidar = use_lidar if use_lidar is not None else (lidar_port is not None)
         self.use_pan_tilt = use_pan_tilt
-        self.use_rtk = use_rtk
         self.enable_socket = enable_socket
         
         # Store lidar_port for reference
         self.lidar_port = lidar_port
         
-        # Determine if we'll use fork for sensors.
-        # Camera must NOT run in forked process: DepthAI/XLink fails with X_LINK_DEVICE_NOT_FOUND
-        # when initialized after fork. So we only fork when we have lidar/RTK but no camera.
-        self.will_fork_sensors = enable_socket and (use_lidar or use_rtk) and not use_camera
-        
         # Initialize controllers based on flags
-        # Note: Sensors (camera, lidar, RTK) and socket will be created in child process if forking
         self.motor = MotorController(serial_port=serial_port, enabled=use_motor) if use_motor else None
         self.joystick = JoystickController() if use_joystick else None
         self.throttle = ThrottleController(max_speed=max_speed) if use_throttle else None
@@ -86,75 +72,37 @@ class ManualDriveApp:
             enabled=use_pan_tilt
         ) if use_pan_tilt else None
         
-        # Sensors and socket only created if NOT forking (legacy mode)
-        if not self.will_fork_sensors:
-            self.camera = CameraController() if use_camera else None
-            self.lidar = LidarController(serial_port=lidar_port) if self.use_lidar and lidar_port else None
-            self.rtk = RTKController(
-                serial_port=rtk_port or DEFAULT_RTK_SERIAL_PORT,
-                enabled=use_rtk,
-                tcp_host=rtk_tcp_host,
-                tcp_port=rtk_tcp_port or (RTK_TCP_DEFAULT_PORT if rtk_tcp_host else None)
-            ) if use_rtk else None
-            
-            # Socket.io components
-            self.socket_server = None
-            self.data_publisher = None
-            
-            if enable_socket:
-                self.socket_server = SocketServer(port=socket_port, debug_payload=socket_debug)
-                self.data_publisher = DataPublisher(
-                    lidar_controller=self.lidar,
-                    camera_controller=self.camera,
-                    rtk_controller=self.rtk,
-                    socket_server=self.socket_server
-                )
-        else:
-            # Sensors will be created in child process
-            self.camera = None
-            self.lidar = None
-            self.rtk = None
-            self.socket_server = None
-            self.data_publisher = None
+        # Initialize sensors and socket components
+        self.camera = CameraController() if use_camera else None
+        self.lidar = LidarController(serial_port=lidar_port) if self.use_lidar and lidar_port else None
+        
+        # Socket.io components
+        self.socket_server = None
+        self.data_publisher = None
+        
+        if enable_socket:
+            self.socket_server = SocketServer(port=socket_port, debug_payload=socket_debug)
+            self.data_publisher = DataPublisher(
+                lidar_controller=self.lidar,
+                camera_controller=self.camera,
+                socket_server=self.socket_server
+            )
         
         self.running = True
-        self.sensor_process_pid = None  # PID du processus enfant pour les capteurs
         
-        # Store socket config for sensor process
+        # Store socket config
         self.socket_port = socket_port
         self.socket_debug = socket_debug
-        self.rtk_port = rtk_port
-        self.rtk_tcp_host = rtk_tcp_host
-        self.rtk_tcp_port = rtk_tcp_port or RTK_TCP_DEFAULT_PORT
         
-        # Setup signal handlers for clean shutdown
-        signal.signal(signal.SIGINT, self._signal_handler)
-        signal.signal(signal.SIGTERM, self._signal_handler)
-    
-    def _signal_handler(self, sig, frame):
-        """Handle shutdown signals in parent process."""
-        print(f"\n[ManualDrive] Signal {sig} received, exiting...")
-        self.running = False
+        # Autonomous mode
+        self.autonomous_mode = False
+        self.b_button_pressed = False
+        self.lidar_navigator = None
         
-        # Tuer le processus enfant si il existe encore
-        if self.sensor_process_pid is not None:
-            try:
-                # Vérifier si le processus existe encore
-                os.kill(self.sensor_process_pid, 0)  # Ne tue pas, juste vérifie
-                print(f"[ManualDrive] Sending SIGTERM to sensor process (PID {self.sensor_process_pid})...")
-                os.kill(self.sensor_process_pid, signal.SIGTERM)
-            except ProcessLookupError:
-                # Le processus n'existe plus, essayer de le récolter pour éviter un zombie
-                try:
-                    os.waitpid(self.sensor_process_pid, os.WNOHANG)
-                except (ChildProcessError, ProcessLookupError):
-                    pass
-            except OSError:
-                # Le processus n'existe plus ou erreur d'accès, essayer de le récolter
-                try:
-                    os.waitpid(self.sensor_process_pid, os.WNOHANG)
-                except (ChildProcessError, ProcessLookupError):
-                    pass
+        # Initialize lidar navigator if lidar is available
+        if self.use_lidar and (self.lidar is not None or lidar_port is not None):
+            from drive.core.config import AUTONOMOUS_MAX_SPEED
+            self.lidar_navigator = LidarNavigator(max_speed=AUTONOMOUS_MAX_SPEED)
     
     def _handle_exit(self):
         """
@@ -168,6 +116,30 @@ class ManualDriveApp:
         return (self.joystick.get_button(Input.BACK) and 
                 self.joystick.get_button(Input.START))
     
+    def _handle_mode_toggle(self):
+        """
+        Handle mode toggle with button B (front montant detection).
+        Toggles between manual and autonomous mode.
+        """
+        if not self.use_joystick or self.joystick is None:
+            return
+        
+        b_pressed = self.joystick.get_button(Input.B)
+        
+        # Detect front montant (button just pressed)
+        if b_pressed and not self.b_button_pressed:
+            # Toggle mode only if lidar is available
+            if self.use_lidar and self.lidar is not None and self.lidar_navigator is not None:
+                self.autonomous_mode = not self.autonomous_mode
+                mode_str = "AUTONOMOUS" if self.autonomous_mode else "MANUAL"
+                print(f"\n[ManualDrive] Mode switched to: {mode_str}")
+            elif self.autonomous_mode:
+                # If trying to enable autonomous but lidar not available, switch back to manual
+                self.autonomous_mode = False
+                print("\n[ManualDrive] Cannot enable autonomous mode: lidar not available. Switching to MANUAL.")
+        
+        self.b_button_pressed = b_pressed
+    
     def _process_camera(self):
         """
         Process camera frame if camera is enabled.
@@ -179,13 +151,11 @@ class ManualDriveApp:
             return self.camera.get_frame()
         return None
     
-    def _initialize_sensors_main_process(self):
+    def _initialize_sensors(self):
         """
-        Initialize camera, lidar, RTK in the main process (no fork).
-        Used when camera is enabled, since DepthAI fails with X_LINK_DEVICE_NOT_FOUND
-        when initialized in a forked child process.
+        Initialize camera and lidar in the main process.
         """
-        print("[ManualDrive] Initializing sensors in main process...")
+        print("[ManualDrive] Initializing sensors...")
         if self.use_camera and self.camera is not None:
             try:
                 self.camera.initialize()
@@ -209,204 +179,14 @@ class ManualDriveApp:
                 self.lidar = None
                 if self.data_publisher is not None:
                     self.data_publisher.lidar_controller = None
-        if self.use_rtk and self.rtk is not None:
-            try:
-                if not self.rtk.initialize():
-                    print("[ManualDrive] Warning: RTK initialization failed")
-                    self.rtk = None
-                    if self.data_publisher is not None:
-                        self.data_publisher.rtk_controller = None
-                else:
-                    print("[ManualDrive] RTK initialized successfully")
-            except Exception as e:
-                print(f"[ManualDrive] Warning: Failed to initialize RTK: {e}")
-                self.rtk = None
-                if self.data_publisher is not None:
-                    self.data_publisher.rtk_controller = None
-    
-    def _run_sensor_process(self):
-        """
-        Fonction exécutée dans le processus enfant pour gérer uniquement les capteurs.
-        Initialise les capteurs (camera, lidar, RTK) et le serveur socket.io,
-        puis lance la boucle de publication des données.
-        """
-        # Réinitialiser les handlers de signaux pour le processus enfant
-        running = [True]  # Utiliser une liste pour permettre la modification dans le handler
-        
-        def sensor_signal_handler(sig, frame):
-            """Handle shutdown signals in sensor process."""
-            print(f"\n[SensorProcess] Signal {sig} received, exiting...")
-            running[0] = False
-        
-        signal.signal(signal.SIGINT, sensor_signal_handler)
-        signal.signal(signal.SIGTERM, sensor_signal_handler)
-        
-        print("[SensorProcess] Initializing sensors...")
-        sys.stdout.flush()  # Forcer l'affichage immédiat
-        
-        # Initialiser les contrôleurs de capteurs
-        print("[SensorProcess] Creating sensor controllers...")
-        sys.stdout.flush()
-        camera = CameraController() if self.use_camera else None
-        lidar = LidarController(serial_port=self.lidar_port) if self.use_lidar and self.lidar_port else None
-        rtk = RTKController(
-            serial_port=self.rtk_port or DEFAULT_RTK_SERIAL_PORT,
-            enabled=self.use_rtk,
-            tcp_host=self.rtk_tcp_host,
-            tcp_port=self.rtk_tcp_port if self.rtk_tcp_host else None
-        ) if self.use_rtk else None
-        
-        # Initialiser le socket server et data publisher
-        socket_server = None
-        data_publisher = None
-        
-        if self.enable_socket:
-            print("[SensorProcess] Creating socket server and data publisher...")
-            socket_server = SocketServer(port=self.socket_port, debug_payload=self.socket_debug)
-            data_publisher = DataPublisher(
-                lidar_controller=lidar,
-                camera_controller=camera,
-                rtk_controller=rtk,
-                socket_server=socket_server
-            )
-        
-        # Initialiser les capteurs
-        if self.use_camera and camera is not None:
-            print("[SensorProcess] Initializing camera...")
-            sys.stdout.flush()
-            try:
-                camera.initialize()
-                print("[SensorProcess] Camera initialized successfully")
-                sys.stdout.flush()
-            except Exception as e:
-                print(f"[SensorProcess] Warning: Failed to initialize camera: {e}")
-                import traceback
-                traceback.print_exc()
-                sys.stdout.flush()
-                camera = None
-        else:
-            print("[SensorProcess] Camera not enabled or not available")
-            sys.stdout.flush()
-        
-        if self.use_lidar and lidar is not None:
-            print("[SensorProcess] Initializing lidar...")
-            try:
-                if not lidar.initialize():
-                    print("[SensorProcess] Warning: Lidar initialization failed")
-                    lidar = None
-                else:
-                    print("[SensorProcess] Lidar initialized successfully")
-            except Exception as e:
-                print(f"[SensorProcess] Warning: Failed to initialize lidar: {e}")
-                lidar = None
-        
-        if self.use_rtk and rtk is not None:
-            print("[SensorProcess] Initializing RTK...")
-            try:
-                if not rtk.initialize():
-                    print("[SensorProcess] Warning: RTK initialization failed")
-                    rtk = None
-                else:
-                    print("[SensorProcess] RTK initialized successfully")
-            except Exception as e:
-                print(f"[SensorProcess] Warning: Failed to initialize RTK: {e}")
-                rtk = None
-        
-        # Démarrer le socket server et le data publisher
-        if self.enable_socket and socket_server is not None:
-            print("[SensorProcess] Starting socket server...")
-            sys.stdout.flush()
-            try:
-                socket_server.start()
-                print("[SensorProcess] Socket server started")
-                sys.stdout.flush()
-                if data_publisher is not None:
-                    print("[SensorProcess] Starting data publisher...")
-                    sys.stdout.flush()
-                    data_publisher.start()
-                    print("[SensorProcess] Data publisher started")
-                    sys.stdout.flush()
-                print(f"[SensorProcess] Socket.io server running on port {socket_server.port}")
-                sys.stdout.flush()
-            except Exception as e:
-                print(f"[SensorProcess] Warning: Failed to start socket server: {e}")
-                import traceback
-                traceback.print_exc()
-                sys.stdout.flush()
-        
-        print("[SensorProcess] Ready! Collecting and publishing sensor data...")
-        sys.stdout.flush()
-        
-        # Boucle principale du processus capteurs
-        try:
-            while running[0]:
-                # Mettre à jour RTK pour collecter les données
-                if rtk is not None:
-                    rtk.update()
-                
-                # Le DataPublisher s'occupe de collecter et publier les données
-                # dans son propre thread, donc on attend juste ici
-                time.sleep(0.1)
-        
-        except KeyboardInterrupt:
-            print("\n[SensorProcess] Keyboard interrupt received.")
-        except Exception as e:
-            print(f"[SensorProcess] Error: {e}")
-            import traceback
-            traceback.print_exc()
-        finally:
-            # Nettoyage des ressources du processus capteurs
-            print("[SensorProcess] Cleaning up...")
-            
-            # Arrêter le data publisher en premier (il peut utiliser les capteurs)
-            if data_publisher is not None:
-                data_publisher.stop()
-            
-            # Arrêter le socket server
-            if socket_server is not None:
-                socket_server.stop()
-            
-            # Arrêter les capteurs dans l'ordre inverse de leur initialisation
-            if rtk is not None:
-                rtk.stop()
-            
-            if lidar is not None:
-                lidar.stop()
-            
-            # Arrêter la caméra en dernier (DepthAI peut avoir des threads à nettoyer)
-            if camera is not None:
-                camera.stop()
-                # Attendre un peu pour que DepthAI nettoie ses threads
-                time.sleep(0.5)
-            
-            print("[SensorProcess] Shutdown complete.")
-            # Utiliser os._exit() pour éviter les destructeurs Python qui peuvent causer des problèmes
-            # avec les bibliothèques C++ comme DepthAI
-            os._exit(0)
     
     def run(self):
         try:
             print("[ManualDrive] Initializing controllers...")
             
-            # Créer le processus enfant pour les capteurs si nécessaire
-            if self.will_fork_sensors:
-                print("[ManualDrive] Forking sensor process...")
-                child_pid = os.fork()
-                
-                if child_pid == 0:
-                    # Processus enfant : exécuter la fonction des capteurs
-                    self._run_sensor_process()
-                    # _run_sensor_process() appelle sys.exit(0), donc on ne devrait jamais arriver ici
-                    return
-                else:
-                    # Processus parent : sauvegarder le PID du processus enfant
-                    self.sensor_process_pid = child_pid
-                    print(f"[ManualDrive] Sensor process started with PID {child_pid}")
-                    # Attendre un peu pour que le processus enfant s'initialise
-                    time.sleep(1.0)
-            elif self.enable_socket and self.socket_server is not None:
-                # Mode sans fork (camera ou pas de lidar/rtk) : init capteurs dans le processus principal
-                self._initialize_sensors_main_process()
+            # Initialize sensors and start socket server if enabled
+            if self.enable_socket and self.socket_server is not None:
+                self._initialize_sensors()
                 try:
                     self.socket_server.start()
                     if self.data_publisher is not None:
@@ -453,7 +233,21 @@ class ManualDriveApp:
             if not self.use_joystick or self.joystick is None:
                 pygame.init()
             
-            print("[ManualDrive] Ready! Use BACK+START to exit.")
+            # Initialize lidar in main process for autonomous navigation if not already initialized
+            if self.use_lidar and self.lidar is None and self.lidar_port is not None:
+                print("[ManualDrive] Initializing lidar in main process for autonomous navigation...")
+                self.lidar = LidarController(serial_port=self.lidar_port)
+                try:
+                    if not self.lidar.initialize():
+                        print("[ManualDrive] Warning: Lidar initialization failed for autonomous navigation")
+                        self.lidar = None
+                    else:
+                        print("[ManualDrive] Lidar initialized for autonomous navigation")
+                except Exception as e:
+                    print(f"[ManualDrive] Warning: Failed to initialize lidar for autonomous navigation: {e}")
+                    self.lidar = None
+            
+            print("[ManualDrive] Ready! Use BACK+START to exit. Press B to toggle autonomous/manual mode.")
 
             last_status_print = 0.0
 
@@ -467,19 +261,34 @@ class ManualDriveApp:
                     if self._handle_exit():
                         print("[ManualDrive] Exit requested (BACK+START).")
                         break
+                    
+                    # Handle mode toggle with button B
+                    self._handle_mode_toggle()
 
                 acceleration = 0.0
                 steering = 0.0
 
-                if self.use_throttle and self.throttle is not None and self.use_joystick and self.joystick is not None:
-                    rt_value = self.joystick.get_rt()
-                    lt_value = self.joystick.get_lt()
-                    target = self.throttle.compute_target(rt_value, lt_value)
-                    self.throttle.update(target)
-                    acceleration = self.throttle.get_acceleration()
+                # Autonomous mode: use lidar navigation
+                if self.autonomous_mode and self.lidar is not None and self.lidar_navigator is not None:
+                    lidar_scan = self.lidar.get_scan()
+                    if lidar_scan is not None and len(lidar_scan) > 0:
+                        acceleration, steering = self.lidar_navigator.compute_commands(lidar_scan)
+                    else:
+                        # No lidar data, stop
+                        acceleration = 0.0
+                        steering = 0.0
+                
+                # Manual mode: use joystick
+                else:
+                    if self.use_throttle and self.throttle is not None and self.use_joystick and self.joystick is not None:
+                        rt_value = self.joystick.get_rt()
+                        lt_value = self.joystick.get_lt()
+                        target = self.throttle.compute_target(rt_value, lt_value)
+                        self.throttle.update(target)
+                        acceleration = self.throttle.get_acceleration()
 
-                if self.use_joystick and self.joystick is not None:
-                    steering = self.joystick.get_steering()
+                    if self.use_joystick and self.joystick is not None:
+                        steering = self.joystick.get_steering()
 
                 if self.use_motor and self.motor is not None:
                     self.motor.set_commands(acceleration, steering)
@@ -495,14 +304,11 @@ class ManualDriveApp:
                         tilt_axis = -self.joystick.get_axis(Axis.RIGHT_JOY_Y)
                         self.pantilt.set_analog_position(pan_axis, tilt_axis)
 
-                # Update RTK when running in main process (no fork, e.g. when camera is used)
-                if self.rtk is not None:
-                    self.rtk.update()
-
                 now = time.monotonic()
                 if now - last_status_print > 0.2:
                     last_status_print = now
-                    sys.stdout.write(f"\rDuty: {acceleration:.3f} | Steer: {(steering + 1) / 2:.3f}   ")
+                    mode_str = "AUTO" if self.autonomous_mode else "MANUAL"
+                    sys.stdout.write(f"\r[{mode_str}] Duty: {acceleration:.3f} | Steer: {(steering + 1) / 2:.3f}   ")
                     sys.stdout.flush()
 
                 time.sleep(LOOP_SLEEP_TIME)
@@ -515,104 +321,21 @@ class ManualDriveApp:
             traceback.print_exc()
         finally:
             self.cleanup()
-            # S'assurer que le processus parent se termine
-            # Réinitialiser les handlers de signaux pour éviter les boucles
-            signal.signal(signal.SIGINT, signal.SIG_DFL)
-            signal.signal(signal.SIGTERM, signal.SIG_DFL)
 
     def cleanup(self):
         """Clean up resources."""
         print("[ManualDrive] Cleaning up...")
         
-        # Tuer le processus enfant si il existe encore
-        if self.sensor_process_pid is not None:
-            try:
-                # Vérifier si le processus existe encore
-                os.kill(self.sensor_process_pid, 0)  # Ne tue pas, juste vérifie
-                print(f"[ManualDrive] Terminating sensor process (PID {self.sensor_process_pid})...")
-                os.kill(self.sensor_process_pid, signal.SIGTERM)
-                
-                # Attendre la fin du processus enfant (avec timeout)
-                max_wait = 2.0  # Maximum 2 secondes d'attente
-                waited = 0.0
-                process_terminated = False
-                
-                while waited < max_wait:
-                    try:
-                        # Vérifier si le processus existe encore
-                        os.kill(self.sensor_process_pid, 0)
-                        # Le processus existe encore, essayer de le récolter
-                        try:
-                            pid, status = os.waitpid(self.sensor_process_pid, os.WNOHANG)
-                            if pid != 0:
-                                # Le processus s'est terminé
-                                print(f"[ManualDrive] Sensor process terminated (status: {status})")
-                                process_terminated = True
-                                break
-                        except ChildProcessError:
-                            # Le processus est déjà terminé (récolté par un autre wait)
-                            print(f"[ManualDrive] Sensor process already terminated")
-                            process_terminated = True
-                            break
-                    except ProcessLookupError:
-                        # Le processus n'existe plus
-                        print(f"[ManualDrive] Sensor process not found")
-                        process_terminated = True
-                        break
-                    except OSError:
-                        # Erreur d'accès, le processus n'existe probablement plus
-                        print(f"[ManualDrive] Sensor process access error, assuming terminated")
-                        process_terminated = True
-                        break
-                    
-                    time.sleep(0.1)
-                    waited += 0.1
-                
-                # Si le processus n'est toujours pas terminé, forcer avec SIGKILL
-                if not process_terminated:
-                    try:
-                        os.kill(self.sensor_process_pid, 0)  # Vérifier qu'il existe encore
-                        print(f"[ManualDrive] Force killing sensor process...")
-                        os.kill(self.sensor_process_pid, signal.SIGKILL)
-                        # Attendre la fin forcée (non-bloquant avec timeout)
-                        for _ in range(10):  # 1 seconde max
-                            try:
-                                pid, status = os.waitpid(self.sensor_process_pid, os.WNOHANG)
-                                if pid != 0:
-                                    break
-                            except (ChildProcessError, ProcessLookupError):
-                                break
-                            time.sleep(0.1)
-                    except (ProcessLookupError, OSError):
-                        pass  # Déjà terminé
-                        
-            except ProcessLookupError:
-                # Le processus n'existe plus, essayer de le récolter quand même
-                try:
-                    os.waitpid(self.sensor_process_pid, os.WNOHANG)
-                except (ChildProcessError, ProcessLookupError):
-                    pass  # Déjà récolté ou n'existe pas
-            except OSError as e:
-                # Le processus n'existe plus ou erreur d'accès
-                # Essayer de le récolter quand même pour éviter un zombie
-                try:
-                    os.waitpid(self.sensor_process_pid, os.WNOHANG)
-                except (ChildProcessError, ProcessLookupError):
-                    pass
-        
-        # When not forking, sensors run in main process: stop data_publisher, socket, sensors
-        if not self.will_fork_sensors:
-            if self.data_publisher is not None:
-                self.data_publisher.stop()
-            if self.socket_server is not None:
-                self.socket_server.stop()
-            if self.rtk is not None:
-                self.rtk.stop()
-            if self.lidar is not None:
-                self.lidar.stop()
-            if self.camera is not None:
-                self.camera.stop()
-                time.sleep(0.5)  # DepthAI cleanup
+        # Stop sensors, data publisher, and socket server
+        if self.data_publisher is not None:
+            self.data_publisher.stop()
+        if self.socket_server is not None:
+            self.socket_server.stop()
+        if self.lidar is not None:
+            self.lidar.stop()
+        if self.camera is not None:
+            self.camera.stop()
+            time.sleep(0.5)  # DepthAI cleanup
         
         # Stop motor (only if enabled)
         if self.use_motor and self.motor is not None:
@@ -623,8 +346,3 @@ class ManualDriveApp:
             self.pantilt.stop()
         
         print("[ManualDrive] Shutdown complete.")
-        
-        # S'assurer que le processus parent se termine correctement
-        # Réinitialiser les handlers de signaux pour éviter les boucles
-        signal.signal(signal.SIGINT, signal.SIG_DFL)
-        signal.signal(signal.SIGTERM, signal.SIG_DFL)

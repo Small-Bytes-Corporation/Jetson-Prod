@@ -39,7 +39,7 @@ def _payload_for_debug(data, max_str_len=200, max_list_len=10):
 
 class SocketServer:
     """
-    Socket.io server for broadcasting lidar and camera data to clients.
+    Socket.io server for broadcasting camera data to clients.
     """
 
     def __init__(self, port=SOCKETIO_PORT, host=SOCKETIO_HOST, cors_origins=SOCKETIO_CORS_ORIGINS, debug_payload=False):

@@ -6,22 +6,20 @@ import platform
 import glob
 import os
 
-# Load environment variables from .env file if available
-try:
-    from dotenv import load_dotenv
-    # Load .env file from project root (parent of drive/core/)
-    _env_path = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), '.env')
-    load_dotenv(_env_path)
-except ImportError:
-    # python-dotenv not installed, skip loading .env
-    pass
-
 # Motor control constants
 MAX_SPEED = 0.15
 DELTA_ACC = 0.003
 DELTA_BRAKE = 0.006
 # DEFAULT_SERIAL_PORT will be set after loading ports_config.py
 DEFAULT_SERIAL_PORT = None  # Will be set below
+
+# Autonomous navigation constants
+AUTONOMOUS_MAX_SPEED = 0.15  # Maximum speed for autonomous mode (same as MAX_SPEED by default)
+AUTONOMOUS_MIN_SPEED = 0.05  # Minimum speed for autonomous mode
+AUTONOMOUS_SAFETY_DISTANCE = 0.5  # Safety bubble radius (meters)
+AUTONOMOUS_FIELD_OF_VIEW = (-90.0, 90.0)  # Field of view in degrees (left, right)
+AUTONOMOUS_LOOKAHEAD_DISTANCE = 2.0  # Preferred forward distance (meters)
+AUTONOMOUS_GAP_THRESHOLD = 0.3  # Minimum gap size to consider (meters)
 
 # Camera constants
 CAM_WIDTH = 320
@@ -92,21 +90,18 @@ try:
         # Use ports from ports_config.py
         _VESC_PORT = getattr(ports_config, 'VESC_PORT', '/dev/ttyACM1')
         _LIDAR_PORT = getattr(ports_config, 'LIDAR_PORT', '/dev/ttyUSB0')
-        _RTK_PORT = getattr(ports_config, 'RTK_PORT', '/dev/ttyUSB1')
         _PAN_TILT_PORT = getattr(ports_config, 'PAN_TILT_PORT', '/dev/ttyACM2')
         _CAMERA_DEVICE_ID = getattr(ports_config, 'CAMERA_DEVICE_ID', None)
     else:
         # Fallback to defaults if ports_config.py doesn't exist
         _VESC_PORT = '/dev/ttyACM1'
         _LIDAR_PORT = '/dev/ttyUSB0'
-        _RTK_PORT = '/dev/ttyUSB1'
         _PAN_TILT_PORT = '/dev/ttyACM2'
         _CAMERA_DEVICE_ID = None
 except Exception:
     # Fallback to defaults if import fails
     _VESC_PORT = '/dev/ttyACM1'
     _LIDAR_PORT = '/dev/ttyUSB0'
-    _RTK_PORT = '/dev/ttyUSB1'
     _PAN_TILT_PORT = '/dev/ttyACM2'
     _CAMERA_DEVICE_ID = None
 
@@ -137,12 +132,6 @@ PAN_TILT_STEP_SIZE = 0.05  # Step size for discrete movement
 PAN_TILT_SEND_HZ = 20  # Serial communication frequency
 PAN_TILT_DEADZONE = 0.08  # Deadzone for analog stick input
 
-# RTK GNSS (Point One / Quectel LG69T) constants (default from ports_config.py)
-DEFAULT_RTK_SERIAL_PORT = _RTK_PORT
-RTK_BAUDRATE = 460800
-# TCP port for p1-runner output (when using init_rtk --tcp). main.py connects here for valid RTK fix.
-RTK_TCP_DEFAULT_PORT = 30201
-
 # Set DEFAULT_SERIAL_PORT and PAN_TILT_SERIAL_PORT after loading ports_config
 DEFAULT_SERIAL_PORT = _VESC_PORT
 PAN_TILT_SERIAL_PORT = _PAN_TILT_PORT
@@ -150,10 +139,3 @@ PAN_TILT_SERIAL_PORT = _PAN_TILT_PORT
 # Camera device ID (from ports_config.py)
 # None = use first available camera, or index (0, 1, ...) or mxid string
 CAMERA_DEVICE_ID = _CAMERA_DEVICE_ID
-
-# RTK GNSS Polaris configuration
-# Load from environment variables if available, otherwise use defaults
-POLARIS_API_KEY = os.getenv('POLARIS_API_KEY', 'be05a69030d24ec883c3a704d48dcb50')
-POLARIS_NTRIP_HOST = os.getenv('POLARIS_NTRIP_HOST', 'truertk.pointonenav.com')  # ou virtualrtk.pointonenav.com
-POLARIS_NTRIP_PORT = int(os.getenv('POLARIS_NTRIP_PORT', '2102'))  # TLS encrypted (recommandé) ou 2101 pour plaintext
-POLARIS_NTRIP_MOUNT_POINT = os.getenv('POLARIS_NTRIP_MOUNT_POINT', 'POLARIS')  # ITRF2014 global datum
