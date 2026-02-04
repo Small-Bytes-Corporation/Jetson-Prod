@@ -136,6 +136,28 @@ def main():
         help="With --list-devices: only show USB info, do not probe protocols (faster, no exclusive port)",
     )
 
+    debug_grp = parser.add_argument_group("Debug")
+    debug_grp.add_argument(
+        "--debug-pan-tilt",
+        action="store_true",
+        help="Print pan/tilt debug messages",
+    )
+    debug_grp.add_argument(
+        "--debug-joystick",
+        action="store_true",
+        help="Print joystick input and status (Duty/Steer)",
+    )
+    debug_grp.add_argument(
+        "--debug-lidar",
+        action="store_true",
+        help="Print lidar debug messages",
+    )
+    debug_grp.add_argument(
+        "--debug-camera",
+        action="store_true",
+        help="Print camera debug messages",
+    )
+
     args = parser.parse_args()
     
     if args.list_devices:
@@ -190,6 +212,10 @@ def main():
             use_joystick=not args.no_joystick,
             use_throttle=not args.no_throttle,
             use_lidar=use_lidar,
+            debug_pan_tilt=args.debug_pan_tilt,
+            debug_joystick=args.debug_joystick,
+            debug_lidar=args.debug_lidar,
+            debug_camera=args.debug_camera,
         )
         
         # Run the application

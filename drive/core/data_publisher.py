@@ -15,7 +15,8 @@ class DataPublisher:
     formats it according to the protocol, and publishes via SocketServer.
     """
     
-    def __init__(self, lidar_controller, camera_controller, socket_server):
+    def __init__(self, lidar_controller, camera_controller, socket_server,
+                 debug_camera=False, debug_lidar=False):
         """
         Initialize the data publisher.
         
@@ -23,8 +24,12 @@ class DataPublisher:
             lidar_controller: LidarController instance (can be None).
             camera_controller: CameraController instance (can be None).
             socket_server: SocketServer instance.
+            debug_camera: If True, print camera data debug messages.
+            debug_lidar: If True, print lidar data debug messages.
         """
         self.lidar_controller = lidar_controller
+        self.debug_camera = debug_camera
+        self.debug_lidar = debug_lidar
         self.camera_controller = camera_controller
         self.socket_server = socket_server
         
@@ -106,7 +111,8 @@ class DataPublisher:
                         "format": "jpeg"
                     }
                 except Exception as e:
-                    print(f"[DataPublisher] Error encoding camera frame: {e}")
+                    if self.debug_camera:
+                        print(f"[DataPublisher] Error encoding camera frame: {e}")
         
         # Return data if we have camera data
         if data["camera"] is not None:

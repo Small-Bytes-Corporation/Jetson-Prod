@@ -21,7 +21,7 @@ class CameraController:
     Controller for DepthAI camera - captures raw frames only.
     """
     
-    def __init__(self, width=CAM_WIDTH, height=CAM_HEIGHT, fps=CAM_FPS):
+    def __init__(self, width=CAM_WIDTH, height=CAM_HEIGHT, fps=CAM_FPS, debug=False):
         """
         Initialize the camera controller.
         
@@ -29,8 +29,10 @@ class CameraController:
             width: Camera width in pixels.
             height: Camera height in pixels.
             fps: Frames per second.
+            debug: If True, print debug messages.
         """
         self.width = width
+        self.debug = debug
         self.height = height
         self.fps = fps
         self.device = None
@@ -91,7 +93,8 @@ class CameraController:
                     self.device = dai.Device(pipeline)
                 self.q_rgb = self.device.getOutputQueue("rgb", maxSize=4, blocking=False)
             self._initialized = True
-            print(f"[Camera] Initialized: {self.width}x{self.height} @ {self.fps}fps")
+            if self.debug:
+                print(f"[Camera] Initialized: {self.width}x{self.height} @ {self.fps}fps")
         except Exception as e:
             raise RuntimeError(f"Failed to initialize camera: {e}")
     
@@ -126,7 +129,8 @@ class CameraController:
             elif self.device is not None and self.device is not True and hasattr(self.device, "close"):
                 self.device.close()
         except Exception as e:
-            print(f"[Camera] Error during stop: {e}")
+            if self.debug:
+                print(f"[Camera] Error during stop: {e}")
         finally:
             self._initialized = False
             self.device = None

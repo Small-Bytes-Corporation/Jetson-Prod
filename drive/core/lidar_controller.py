@@ -11,10 +11,11 @@ import math
 from .config import DEFAULT_LIDAR_PORT, LIDAR_BAUDRATE, _get_available_serial_ports, IS_MAC
 
 class LidarController:
-    def __init__(self, serial_port=DEFAULT_LIDAR_PORT, baudrate=LIDAR_BAUDRATE, enabled=True):
+    def __init__(self, serial_port=DEFAULT_LIDAR_PORT, baudrate=LIDAR_BAUDRATE, enabled=True, debug=False):
         self.serial_port = serial_port
         self.baudrate = baudrate
         self.enabled = enabled
+        self.debug = debug
         self.serial_conn = None
         self._initialized = False
         
@@ -22,12 +23,12 @@ class LidarController:
         self.last_scan = []           
         self.current_scan_buffer = [] 
         self.last_angle = 0.0
-        self._buffer = bytearray()    
-        self._debug_mode = False
+        self._buffer = bytearray()
 
     def initialize(self):
         if not self.enabled:
-            print("[Lidar] Disabled (mock mode)")
+            if self.debug:
+                print("[Lidar] Disabled (mock mode)")
             self._initialized = True
             return True
         
@@ -39,10 +40,12 @@ class LidarController:
                 timeout=1.0
             )
             self._initialized = True
-            print(f"[Lidar] Initialized on {self.serial_port} @ {self.baudrate}")
+            if self.debug:
+                print(f"[Lidar] Initialized on {self.serial_port} @ {self.baudrate}")
             return True
         except Exception as e:
-            print(f"[Lidar] Init failed: {e}")
+            if self.debug:
+                print(f"[Lidar] Init failed: {e}")
             return False
 
     def get_scan(self):
@@ -85,7 +88,8 @@ class LidarController:
             return None
 
         except Exception as e:
-            print(f"[Lidar] Error: {e}")
+            if self.debug:
+                print(f"[Lidar] Error: {e}")
             self._buffer = bytearray() # Reset buffer on error
             return None
 
@@ -143,7 +147,7 @@ class LidarController:
             self.last_angle = start_angle
 
         except Exception as e:
-            if self._debug_mode:
+            if self.debug:
                 print(f"[Lidar] Parse error: {e}")
 
     def is_available(self):

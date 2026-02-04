@@ -21,10 +21,11 @@ class PanTiltController:
     def __init__(self, serial_port=PAN_TILT_SERIAL_PORT, enabled=True,
                  pan_min=PAN_MIN, pan_max=PAN_MAX,
                  tilt_min=TILT_MIN, tilt_max=TILT_MAX,
-                 step_size=PAN_TILT_STEP_SIZE):
+                 step_size=PAN_TILT_STEP_SIZE, debug=False):
         
         self.serial_port = serial_port
         self.enabled = enabled
+        self.debug = debug
         self.pan_min = pan_min
         self.pan_max = pan_max
         self.tilt_min = tilt_min
@@ -53,7 +54,8 @@ class PanTiltController:
         Initialize serial connection and stop motors.
         """
         if not self.enabled:
-            print("[PanTilt] Controller disabled (mock mode)")
+            if self.debug:
+                print("[PanTilt] Controller disabled (mock mode)")
             self._initialized = True
             return
         
@@ -64,12 +66,14 @@ class PanTiltController:
                 timeout=0,
                 write_timeout=0
             )
-            print(f"[PanTilt] Serial connection opened on {self.serial_port}")
+            if self.debug:
+                print(f"[PanTilt] Serial connection opened on {self.serial_port}")
             
             time.sleep(2)
             
             # Reset
-            print("[PanTilt] Resetting camera to center/stop...")
+            if self.debug:
+                print("[PanTilt] Resetting camera to center/stop...")
             for _ in range(5):
                 self._send_command(0.0, 0.0)
                 time.sleep(0.05)
@@ -79,7 +83,8 @@ class PanTiltController:
             self.joy_pan_memory = 0.0
             
             self._initialized = True
-            print("[PanTilt] Initialized.")
+            if self.debug:
+                print("[PanTilt] Initialized.")
             
         except Exception as e:
             raise RuntimeError(f"Failed to initialize pan/tilt controller: {e}")
@@ -94,7 +99,8 @@ class PanTiltController:
             if self.serial_conn.in_waiting:
                 self.serial_conn.read(self.serial_conn.in_waiting)
         except Exception as e:
-            print(f"[PanTilt] Error sending command: {e}")
+            if self.debug:
+                print(f"[PanTilt] Error sending command: {e}")
     
     def update(self, pan_delta, tilt_delta):
         """
@@ -146,7 +152,8 @@ class PanTiltController:
         """
         if not self._initialized:
             return
-        print("[PanTilt] analog:", pan_axis, tilt_axis)
+        if self.debug:
+            print("[PanTilt] analog:", pan_axis, tilt_axis)
         
         # 1. Application Deadzone
         pan = 0.0 if abs(pan_axis) < PAN_TILT_DEADZONE else pan_axis

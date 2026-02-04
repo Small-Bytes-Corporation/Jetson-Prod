@@ -53,8 +53,9 @@ class JoystickController:
     Controller for joystick/gamepad input using pygame.
     """
     
-    def __init__(self):
+    def __init__(self, debug=False):
         """Initialize the joystick controller."""
+        self.debug = debug
         self.js = None
         self.input_state = [0 for _ in range(19)]
         # Initialize triggers to -1 (not pressed)
@@ -78,7 +79,8 @@ class JoystickController:
         self.js = pygame.joystick.Joystick(0)
         self.js.init()
         self._initialized = True
-        print(f"[Joystick] Initialized: {self.js.get_name()}")
+        if self.debug:
+            print(f"[Joystick] Initialized: {self.js.get_name()}")
     
     def _safe_get_axis(self, axis_index, default=0.0):
         """

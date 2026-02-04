@@ -29,7 +29,8 @@ class ManualDriveApp:
                  use_camera=False, enable_socket=False, lidar_port=None, socket_port=SOCKETIO_PORT,
                  socket_debug=False,
                  use_motor=True, pan_tilt_port=None, use_pan_tilt=True,
-                 use_joystick=True, use_throttle=True, use_lidar=None):
+                 use_joystick=True, use_throttle=True, use_lidar=None,
+                 debug_pan_tilt=False, debug_joystick=False, debug_lidar=False, debug_camera=False):
         """
         Initialize the manual drive application.
         
@@ -47,8 +48,16 @@ class ManualDriveApp:
             use_joystick: Whether to enable joystick controller. If False, joystick is disabled.
             use_throttle: Whether to enable throttle controller. If False, throttle is disabled.
             use_lidar: Whether to enable lidar. If None, auto-enabled if lidar_port is provided.
+            debug_pan_tilt: If True, print pan/tilt debug messages.
+            debug_joystick: If True, print joystick input and status (Duty/Steer).
+            debug_lidar: If True, print lidar debug messages.
+            debug_camera: If True, print camera debug messages.
         """
         self.max_speed = max_speed
+        self.debug_pan_tilt = debug_pan_tilt
+        self.debug_joystick = debug_joystick
+        self.debug_lidar = debug_lidar
+        self.debug_camera = debug_camera
         self.serial_port = serial_port
         
         # Module flags (stored as attributes for documentation and introspection)
@@ -65,16 +74,17 @@ class ManualDriveApp:
         
         # Initialize controllers based on flags
         self.motor = MotorController(serial_port=serial_port, enabled=use_motor) if use_motor else None
-        self.joystick = JoystickController() if use_joystick else None
+        self.joystick = JoystickController(debug=debug_joystick) if use_joystick else None
         self.throttle = ThrottleController(max_speed=max_speed) if use_throttle else None
         self.pantilt = PanTiltController(
             serial_port=pan_tilt_port or PAN_TILT_SERIAL_PORT,
-            enabled=use_pan_tilt
+            enabled=use_pan_tilt,
+            debug=debug_pan_tilt
         ) if use_pan_tilt else None
         
         # Initialize sensors and socket components
-        self.camera = CameraController() if use_camera else None
-        self.lidar = LidarController(serial_port=lidar_port) if self.use_lidar and lidar_port else None
+        self.camera = CameraController(debug=debug_camera) if use_camera else None
+        self.lidar = LidarController(serial_port=lidar_port, debug=debug_lidar) if self.use_lidar and lidar_port else None
         
         # Socket.io components
         self.socket_server = None
@@ -85,7 +95,9 @@ class ManualDriveApp:
             self.data_publisher = DataPublisher(
                 lidar_controller=self.lidar,
                 camera_controller=self.camera,
-                socket_server=self.socket_server
+                socket_server=self.socket_server,
+                debug_camera=debug_camera,
+                debug_lidar=debug_lidar
             )
         
         self.running = True
@@ -236,7 +248,7 @@ class ManualDriveApp:
             # Initialize lidar in main process for autonomous navigation if not already initialized
             if self.use_lidar and self.lidar is None and self.lidar_port is not None:
                 print("[ManualDrive] Initializing lidar in main process for autonomous navigation...")
-                self.lidar = LidarController(serial_port=self.lidar_port)
+                self.lidar = LidarController(serial_port=self.lidar_port, debug=self.debug_lidar)
                 try:
                     if not self.lidar.initialize():
                         print("[ManualDrive] Warning: Lidar initialization failed for autonomous navigation")
@@ -305,7 +317,7 @@ class ManualDriveApp:
                         self.pantilt.set_analog_position(pan_axis, tilt_axis)
 
                 now = time.monotonic()
-                if now - last_status_print > 0.2:
+                if self.debug_joystick and now - last_status_print > 0.2:
                     last_status_print = now
                     mode_str = "AUTO" if self.autonomous_mode else "MANUAL"
                     sys.stdout.write(f"\r[{mode_str}] Duty: {acceleration:.3f} | Steer: {(steering + 1) / 2:.3f}   ")
