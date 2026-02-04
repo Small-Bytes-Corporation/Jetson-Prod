@@ -141,6 +141,17 @@ class DataPublisher:
         if data["lidar"] is not None or data["camera"] is not None or has_rtk:
             return data
         
+        # Emit minimal sensor_data when at least one sensor is available but has not
+        # produced data yet (e.g. lidar waiting for first complete 360° scan). This
+        # helps debug: clients see the sensor_data event and --socket-debug shows output.
+        has_any_sensor = (
+            (self.lidar_controller is not None and self.lidar_controller.is_available())
+            or (self.camera_controller is not None and self.camera_controller.is_available())
+            or (self.rtk_controller is not None and self.rtk_controller.is_available())
+        )
+        if has_any_sensor:
+            return data
+        
         return None
     
     def _get_status(self):

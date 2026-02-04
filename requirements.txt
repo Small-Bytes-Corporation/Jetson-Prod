@@ -10,6 +10,7 @@ python-socketio==5.4.1
 pyserial==3.5
 pythoncrc==1.21
 fusion-engine-client>=1.24.4,<1.25.0
+typing_extensions>=4.0.0; python_version < "3.10"
 argparse-formatter>=1.4
 colorama>=0.4.4
 construct>=2.10.0

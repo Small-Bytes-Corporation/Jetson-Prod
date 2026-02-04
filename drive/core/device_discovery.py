@@ -26,6 +26,8 @@ try:
 except ImportError:
     _FUSION_ENGINE_AVAILABLE = False
 
+_VESC_AVAILABLE = False  # Will be set to True in _probe_vesc if available
+
 
 def _get_serial_by_id_name(port_path):
     """
@@ -126,9 +128,69 @@ def _probe_rtk(port_path, read_duration=0.3):
     return False
 
 
+def _probe_vesc(port_path, timeout=2.0):
+    """
+    Try to connect to VESC and get firmware version.
+    Returns True if VESC responds successfully.
+    """
+    if not _SERIAL_AVAILABLE:
+        return False
+    # Try to import VESC on demand
+    try:
+        from pyvesc import VESC
+    except ImportError:
+        return False
+    
+    motor = None
+    try:
+        motor = VESC(serial_port=port_path)
+        version = motor.get_firmware_version()
+        # If we got here without exception, it's likely a VESC
+        if version is not None:
+            return True
+    except Exception:
+        pass
+    finally:
+        # Clean up VESC connection
+        if motor is not None:
+            try:
+                motor.stop_heartbeat()
+            except Exception:
+                pass
+    return False
+
+
+def _identify_by_usb_info(usb_info, by_id):
+    """
+    Identify device type based on USB vendor/product info and by-id name.
+    Returns device type string or None if unknown.
+    """
+    if not usb_info and not by_id:
+        return None
+    
+    manufacturer = (usb_info.get("manufacturer") or "").lower()
+    product = (usb_info.get("product") or "").lower()
+    by_id_lower = (by_id or "").lower()
+    
+    # RTK GNSS - Silicon Labs CP2105
+    if "silicon" in manufacturer or "cp2105" in product or "cp2105" in by_id_lower:
+        return "RTK GNSS (Point One / Fusion Engine)"
+    
+    # Arduino - typically Pan/Tilt controller
+    if "arduino" in manufacturer or "arduino" in product or "arduino" in by_id_lower:
+        return "Pan/Tilt (Arduino)"
+    
+    # STMicroelectronics ChibiOS - typically VESC
+    if "stmicroelectronics" in manufacturer or "chibios" in product or "chibios" in by_id_lower:
+        return "VESC (STMicroelectronics)"
+    
+    return None
+
+
 def get_serial_port_info(port_path, probe=True):
     """
     Return a dict with path, by_id name (Linux), sysfs USB info (Linux), and probable device (if probe=True).
+    Uses USB info first, then protocol probing.
     """
     info = {
         "path": port_path,
@@ -136,20 +198,36 @@ def get_serial_port_info(port_path, probe=True):
         "usb": _get_sysfs_usb_info(port_path),
         "probable": None,
     }
+    
+    # First try USB-based identification (fast, no port access needed)
+    usb_identified = _identify_by_usb_info(info["usb"], info["by_id"])
+    
     if probe and _SERIAL_AVAILABLE:
+        # Protocol probing (slower, requires exclusive port access)
         if _probe_lidar(port_path):
             info["probable"] = "Lidar (D500/LD19)"
         elif _probe_rtk(port_path):
             info["probable"] = "RTK GNSS (Point One / Fusion Engine)"
+        elif _probe_vesc(port_path):
+            info["probable"] = "VESC (STMicroelectronics)"
+        elif usb_identified:
+            # Use USB identification if probing didn't find anything
+            info["probable"] = usb_identified
         else:
             info["probable"] = "Serial (VESC, Pan/Tilt ou autre)"
+    elif usb_identified:
+        # If not probing, use USB identification
+        info["probable"] = usb_identified
+    elif not probe:
+        info["probable"] = "Serial (VESC, Pan/Tilt ou autre)"
+    
     return info
 
 
 def get_detected_port_mapping(probe=True):
     """
-    Identify which serial port is Lidar, which is RTK, etc. via probe (or USB info only if probe=False).
-    Returns a dict with keys "lidar", "rtk" -> port path (e.g. {"lidar": "/dev/ttyUSB2", "rtk": "/dev/ttyUSB0"}).
+    Identify which serial port is Lidar, RTK, VESC, Pan/Tilt, etc. via probe (or USB info only if probe=False).
+    Returns a dict with keys "lidar", "rtk", "vesc", "pan_tilt" -> port path.
     Only includes keys for device types that were detected.
     """
     results = list_devices(probe=probe, verbose=False)
@@ -163,6 +241,10 @@ def get_detected_port_mapping(probe=True):
             mapping["lidar"] = path
         elif probable == "RTK GNSS (Point One / Fusion Engine)":
             mapping["rtk"] = path
+        elif probable == "VESC (STMicroelectronics)":
+            mapping["vesc"] = path
+        elif probable == "Pan/Tilt (Arduino)":
+            mapping["pan_tilt"] = path
     return mapping
 
 

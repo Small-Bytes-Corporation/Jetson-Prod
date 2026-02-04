@@ -20,7 +20,8 @@ except ImportError:
 MAX_SPEED = 0.15
 DELTA_ACC = 0.003
 DELTA_BRAKE = 0.006
-DEFAULT_SERIAL_PORT = '/dev/ttyACM1'
+# DEFAULT_SERIAL_PORT will be set after loading ports_config.py
+DEFAULT_SERIAL_PORT = None  # Will be set below
 
 # Camera constants
 CAM_WIDTH = 320
@@ -77,34 +78,40 @@ def _get_available_serial_ports():
         return sorted(ports)
 
 
-def _detect_lidar_port():
-    """
-    Fallback lidar port when auto-detection (device_discovery) finds nothing.
-    Returns first available serial port or platform default.
-    """
-    available_ports = _get_available_serial_ports()
-    if available_ports:
-        return available_ports[0]
-    if IS_MAC:
-        return '/dev/tty.usbserial-0001'
-    return '/dev/ttyUSB0'
+# Load port configuration from ports_config.py if available
+try:
+    import sys
+    import importlib.util
+    # Get project root (parent of drive/core/)
+    project_root = os.path.dirname(os.path.dirname(os.path.dirname(__file__)))
+    ports_config_path = os.path.join(project_root, 'ports_config.py')
+    if os.path.exists(ports_config_path):
+        spec = importlib.util.spec_from_file_location("ports_config", ports_config_path)
+        ports_config = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(ports_config)
+        # Use ports from ports_config.py
+        _VESC_PORT = getattr(ports_config, 'VESC_PORT', '/dev/ttyACM1')
+        _LIDAR_PORT = getattr(ports_config, 'LIDAR_PORT', '/dev/ttyUSB0')
+        _RTK_PORT = getattr(ports_config, 'RTK_PORT', '/dev/ttyUSB1')
+        _PAN_TILT_PORT = getattr(ports_config, 'PAN_TILT_PORT', '/dev/ttyACM2')
+        _CAMERA_DEVICE_ID = getattr(ports_config, 'CAMERA_DEVICE_ID', None)
+    else:
+        # Fallback to defaults if ports_config.py doesn't exist
+        _VESC_PORT = '/dev/ttyACM1'
+        _LIDAR_PORT = '/dev/ttyUSB0'
+        _RTK_PORT = '/dev/ttyUSB1'
+        _PAN_TILT_PORT = '/dev/ttyACM2'
+        _CAMERA_DEVICE_ID = None
+except Exception:
+    # Fallback to defaults if import fails
+    _VESC_PORT = '/dev/ttyACM1'
+    _LIDAR_PORT = '/dev/ttyUSB0'
+    _RTK_PORT = '/dev/ttyUSB1'
+    _PAN_TILT_PORT = '/dev/ttyACM2'
+    _CAMERA_DEVICE_ID = None
 
-
-def _detect_rtk_port():
-    """
-    Fallback RTK port when auto-detection (device_discovery) finds nothing.
-    Returns first available serial port or platform default.
-    """
-    available_ports = _get_available_serial_ports()
-    if available_ports:
-        return available_ports[0]
-    if IS_MAC:
-        return '/dev/tty.usbserial-0001'
-    return '/dev/ttyUSB0'
-
-
-# Lidar constants (real default is set at runtime via device_discovery in main)
-DEFAULT_LIDAR_PORT = _detect_lidar_port()
+# Lidar constants (default from ports_config.py)
+DEFAULT_LIDAR_PORT = _LIDAR_PORT
 
 LIDAR_BAUDRATE = 230400  # À vérifier selon documentation D500
 
@@ -121,7 +128,7 @@ LOOP_SLEEP_TIME = 0.05
 
 # Pan/Tilt constants
 PAN_TILT_BAUDRATE = 115200
-PAN_TILT_SERIAL_PORT = '/dev/ttyACM2'  # Default, can be overridden via CLI
+PAN_TILT_SERIAL_PORT = None  # Will be set below
 PAN_MIN = -1.0  # Minimum pan position
 PAN_MAX = 1.0   # Maximum pan position
 TILT_MIN = -1.0  # Minimum tilt position
@@ -130,9 +137,19 @@ PAN_TILT_STEP_SIZE = 0.05  # Step size for discrete movement
 PAN_TILT_SEND_HZ = 20  # Serial communication frequency
 PAN_TILT_DEADZONE = 0.08  # Deadzone for analog stick input
 
-# RTK GNSS (Point One / Quectel LG69T) constants (real default is set at runtime via device_discovery in main)
-DEFAULT_RTK_SERIAL_PORT = _detect_rtk_port()
+# RTK GNSS (Point One / Quectel LG69T) constants (default from ports_config.py)
+DEFAULT_RTK_SERIAL_PORT = _RTK_PORT
 RTK_BAUDRATE = 460800
+# TCP port for p1-runner output (when using init_rtk --tcp). main.py connects here for valid RTK fix.
+RTK_TCP_DEFAULT_PORT = 30201
+
+# Set DEFAULT_SERIAL_PORT and PAN_TILT_SERIAL_PORT after loading ports_config
+DEFAULT_SERIAL_PORT = _VESC_PORT
+PAN_TILT_SERIAL_PORT = _PAN_TILT_PORT
+
+# Camera device ID (from ports_config.py)
+# None = use first available camera, or index (0, 1, ...) or mxid string
+CAMERA_DEVICE_ID = _CAMERA_DEVICE_ID
 
 # RTK GNSS Polaris configuration
 # Load from environment variables if available, otherwise use defaults

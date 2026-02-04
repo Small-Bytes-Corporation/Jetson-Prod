@@ -4,11 +4,14 @@ Main entry point for the robocar control system.
 Use --list-devices to list serial ports and DepthAI cameras (Lidar, RTK, etc.).
 """
 
+# Must run before any fusion_engine_client import (device_discovery, rtk_controller)
+import typing_patch  # noqa: F401
+
 import argparse
 import sys
 from drive.core.config import (
     MAX_SPEED, DEFAULT_SERIAL_PORT, DEFAULT_LIDAR_PORT, SOCKETIO_PORT,
-    PAN_TILT_SERIAL_PORT, DEFAULT_RTK_SERIAL_PORT,
+    PAN_TILT_SERIAL_PORT, DEFAULT_RTK_SERIAL_PORT, RTK_TCP_DEFAULT_PORT,
 )
 
 EPILOG = """
@@ -26,6 +29,10 @@ Examples:
 
   # Test without motor or pan/tilt
   python3 main.py --no-motor --no-pan-tilt --enable-socket
+
+  # RTK with valid fix (Polaris): run init_rtk with --tcp, then main with --rtk-tcp
+  # Terminal 1: python3 scripts/init_rtk.py --tcp 30201
+  # Terminal 2: python3 main.py --enable-socket --rtk-tcp localhost:30201
 """
 
 
@@ -105,7 +112,7 @@ def main():
         "--lidar-port",
         type=str,
         default=None,
-        help=f"Serial port for lidar (e.g. /dev/ttyUSB0). Default: {DEFAULT_LIDAR_PORT} or auto-detect",
+        help=f"Serial port for lidar (e.g. /dev/ttyUSB0). Default: {DEFAULT_LIDAR_PORT}",
     )
     ports.add_argument(
         "--pan-tilt-port",
@@ -117,7 +124,14 @@ def main():
         "--rtk-port",
         type=str,
         default=None,
-        help=f"Serial port for RTK GNSS (default: {DEFAULT_RTK_SERIAL_PORT} or auto-detect)",
+        help=f"Serial port for RTK GNSS (default: {DEFAULT_RTK_SERIAL_PORT})",
+    )
+    ports.add_argument(
+        "--rtk-tcp",
+        type=str,
+        default=None,
+        metavar="HOST:PORT",
+        help="Connect to p1-runner TCP output for RTK (e.g. localhost:30201). Run init_rtk with --tcp first.",
     )
     ports.add_argument(
         "--socket-port",
@@ -154,23 +168,33 @@ def main():
     
     from drive.applications import ManualDriveApp
     
-    # Auto-detect Lidar/RTK ports when not provided (probe once)
-    need_lidar = args.lidar_port is None and not args.no_lidar
-    need_rtk = args.rtk_port is None and not args.no_rtk
-    mapping = {}
-    if need_lidar or need_rtk:
-        from drive.core.device_discovery import get_detected_port_mapping
-        mapping = get_detected_port_mapping(probe=True)
-        if mapping and (need_lidar or need_rtk):
-            print("[Main] Ports auto-détectés:", {k: v for k, v in mapping.items()})
-    
-    # Resolve lidar_port: CLI > auto-detected > config fallback (only if enable_socket)
-    lidar_port = args.lidar_port or mapping.get("lidar")
+    # Resolve ports: CLI > config fallback (from ports_config.py)
+    # Resolve lidar_port: CLI > config fallback (only if enable_socket)
+    lidar_port = args.lidar_port
     if lidar_port is None and args.enable_socket and not args.no_lidar:
         lidar_port = DEFAULT_LIDAR_PORT
     
-    # Resolve rtk_port: CLI > auto-detected > config fallback
-    rtk_port = args.rtk_port or mapping.get("rtk") or DEFAULT_RTK_SERIAL_PORT
+    # Resolve rtk_port: CLI > config fallback
+    rtk_port = args.rtk_port or DEFAULT_RTK_SERIAL_PORT
+    # Parse --rtk-tcp HOST:PORT for p1-runner connection (valid RTK fix with Polaris)
+    rtk_tcp_host = None
+    rtk_tcp_port = None
+    if args.rtk_tcp:
+        parts = args.rtk_tcp.split(":")
+        if len(parts) == 2:
+            rtk_tcp_host, rtk_tcp_port = parts[0], int(parts[1])
+        elif len(parts) == 1 and parts[0].isdigit():
+            rtk_tcp_host = "localhost"
+            rtk_tcp_port = int(parts[0])
+        else:
+            rtk_tcp_host = args.rtk_tcp
+            rtk_tcp_port = RTK_TCP_DEFAULT_PORT
+    
+    # Resolve serial_port (VESC): CLI > config fallback
+    serial_port = args.serial_port
+    
+    # Resolve pan_tilt_port: CLI > config fallback
+    pan_tilt_port = args.pan_tilt_port or PAN_TILT_SERIAL_PORT
     
     # Determine use_lidar: enabled if lidar_port provided and not explicitly disabled
     use_lidar = None if args.no_lidar else (lidar_port is not None)
@@ -184,6 +208,10 @@ def main():
     print(f"[Main] Caméra: use_camera={use_camera}, DepthAI trouvées={len(cameras_found)} (--camera pour forcer, --no-camera pour désactiver)")
     if use_camera and cameras_found and not args.camera:
         print("[Main] Caméra DepthAI détectée, activation pour le stream socket.")
+    if use_camera:
+        print(f"[Main] Utilisation de la première caméra DepthAI disponible")
+    if rtk_tcp_host:
+        print(f"[Main] RTK via TCP {rtk_tcp_host}:{rtk_tcp_port} (p1-runner Polaris - solution valide attendue)")
     
     # Create manual drive application
     try:
@@ -191,20 +219,22 @@ def main():
         
         app = ManualDriveApp(
             max_speed=args.max_speed,
-            serial_port=args.serial_port,
+            serial_port=serial_port,
             use_camera=use_camera,
             enable_socket=args.enable_socket,
             lidar_port=lidar_port if not args.no_lidar else None,
             socket_port=args.socket_port,
             socket_debug=args.socket_debug,
             use_motor=not args.no_motor,
-            pan_tilt_port=args.pan_tilt_port,
+            pan_tilt_port=pan_tilt_port,
             use_pan_tilt=not args.no_pan_tilt,
             use_joystick=not args.no_joystick,
             use_throttle=not args.no_throttle,
             use_lidar=use_lidar,
             rtk_port=rtk_port,
             use_rtk=not args.no_rtk,
+            rtk_tcp_host=rtk_tcp_host,
+            rtk_tcp_port=rtk_tcp_port,
         )
         
         # Run the application

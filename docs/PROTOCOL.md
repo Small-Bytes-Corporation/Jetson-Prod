@@ -35,6 +35,7 @@ Payload envoyé périodiquement avec les données des capteurs.
 - `pose`: objet ou `null` — dernière pose GNSS (champs optionnels selon le message Fusion Engine):
   - `lla_deg`: [lat, lon, alt] en degrés / mètres
   - `solution_type`: type de solution (ex: nom d’énumération)
+  - `solution_stale`: (optionnel) true si Invalid/NaN — dernière pose valide utilisée
   - `position_std_enu_m`: écart-type position ENU [e, n, u] en mètres
   - `gps_time`: temps GPS
   - `p1_time`: temps Point One
@@ -45,7 +46,7 @@ Payload envoyé périodiquement avec les données des capteurs.
   - `gyro_xyz`: vitesse angulaire [gx, gy, gz] en rad/s
   - `p1_time`: temps Point One
 
-Les données ne sont émises que si au moins une source (lidar, camera ou rtk avec pose ou imu) est disponible.
+Les données sont émises dès qu’au moins un capteur est disponible (initialisé). Si aucun capteur n’a encore produit de données (ex. lidar en attente du premier tour complet 360°), le payload contient `lidar: null`, `camera: null`, `rtk: null` avec un `timestamp`. Le lidar LD19/D500 ne produit des points qu’après détection d’un scan complet (premier tour ~1–2 s).
 
 ### `status`
 

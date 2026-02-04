@@ -57,7 +57,6 @@ if __name__ == "__main__":
     if _root not in sys.path:
         sys.path.insert(0, _root)
 
-from drive.core.device_discovery import get_detected_port_mapping
 from drive.core.config import POLARIS_API_KEY, DEFAULT_RTK_SERIAL_PORT
 
 
@@ -111,10 +110,11 @@ def check_rtk_connection(port):
     return True, None
 
 
-def run_p1_runner(p1_dir, port, device_id, polaris_key, duration=None):
+def run_p1_runner(p1_dir, port, device_id, polaris_key, duration=None, tcp_port=None):
     """
     Run p1-host-tools/bin/runner.py with Polaris configuration.
     Returns subprocess.Popen object.
+    If tcp_port is set, forwards Fusion Engine to TCP so main.py can connect via --rtk-tcp.
     """
     runner_path = os.path.join(p1_dir, 'bin', 'runner.py')
     
@@ -142,6 +142,8 @@ def run_p1_runner(p1_dir, port, device_id, polaris_key, duration=None):
         '--polaris', polaris_key,
         '--port', port,
     ]
+    if tcp_port is not None:
+        cmd.extend(['--tcp', str(tcp_port)])
     
     print(f"[InitRTK] Running: {' '.join(cmd)}")
     print(f"[InitRTK] Working directory: {p1_dir}")
@@ -177,6 +179,10 @@ Examples:
 
   # Custom device ID and duration
   python scripts/init_rtk.py --device-id my-device --duration 60
+
+  # Forward Fusion Engine to TCP for main.py (valid RTK fix)
+  python scripts/init_rtk.py --tcp 30201
+  # Then in another terminal: python main.py --enable-socket --rtk-tcp localhost:30201
         """
     )
     
@@ -184,7 +190,7 @@ Examples:
         '--port',
         type=str,
         default=None,
-        help=f'Serial port for RTK device (default: auto-detect or {DEFAULT_RTK_SERIAL_PORT})'
+        help=f'Serial port for RTK device (default: {DEFAULT_RTK_SERIAL_PORT} from ports_config.py)'
     )
     parser.add_argument(
         '--device-id',
@@ -203,6 +209,13 @@ Examples:
         action='store_true',
         help='Only check connection, do not configure Polaris'
     )
+    parser.add_argument(
+        '--tcp',
+        type=int,
+        default=None,
+        metavar='PORT',
+        help='Forward Fusion Engine to TCP port for main.py (use main.py --rtk-tcp localhost:PORT)'
+    )
     
     args = parser.parse_args()
     
@@ -219,17 +232,8 @@ Examples:
     
     print(f"[InitRTK] Using p1-host-tools: {p1_dir}")
     
-    # Get RTK port
-    rtk_port = args.port
-    if rtk_port is None:
-        print("[InitRTK] Auto-detecting RTK port...")
-        mapping = get_detected_port_mapping(probe=True)
-        if 'rtk' in mapping:
-            rtk_port = mapping['rtk']
-            print(f"[InitRTK] Found RTK port: {rtk_port}")
-        else:
-            rtk_port = DEFAULT_RTK_SERIAL_PORT
-            print(f"[InitRTK] No RTK port detected, using default: {rtk_port}")
+    # Get RTK port: CLI > config fallback (from ports_config.py)
+    rtk_port = args.port or DEFAULT_RTK_SERIAL_PORT
     
     # Check port
     port_ok, port_error = check_rtk_connection(rtk_port)
@@ -301,6 +305,8 @@ Examples:
     print(f"  Device ID: {args.device_id}")
     print(f"  Duration: {args.duration} seconds")
     print(f"  Python: {python_version.major}.{python_version.minor}.{python_version.micro}")
+    if args.tcp is not None:
+        print(f"  TCP output: port {args.tcp} (main.py --rtk-tcp localhost:{args.tcp})")
     print()
     print("Instructions:")
     print("  - Watch for 'corrections=X B' messages")
@@ -312,7 +318,7 @@ Examples:
     
     process = None
     try:
-        process = run_p1_runner(p1_dir, rtk_port, args.device_id, POLARIS_API_KEY, args.duration)
+        process = run_p1_runner(p1_dir, rtk_port, args.device_id, POLARIS_API_KEY, args.duration, tcp_port=args.tcp)
         
         # Monitor output with timeout
         start_time = time.time()
@@ -380,8 +386,8 @@ Examples:
                 print("     which python3.11")
                 print()
                 print("  3. Créer un nouvel environnement avec Python 3.10+")
-                print("     conda create -n robotcar-py310 python=3.10")
-                print("     conda activate robotcar-py310")
+                print("     conda create -n robocar python=3.10")
+                print("     conda activate robocar")
                 print("     pip install -r requirements.txt")
         
     except KeyboardInterrupt:

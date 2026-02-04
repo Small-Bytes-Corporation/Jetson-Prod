@@ -78,10 +78,12 @@ class CameraController:
                 cam.setFps(self.fps)
                 xout.setStreamName("rgb")
                 cam.preview.link(xout.input)
+                # Always use first available device (simplified - no CAMERA_DEVICE_ID)
                 device_info = None
                 if hasattr(dai, "Device") and hasattr(dai.Device, "getAllAvailableDevices"):
                     available = dai.Device.getAllAvailableDevices()
                     if available:
+                        # Use first available device
                         device_info = available[0]
                 try:
                     self.device = dai.Device(pipeline, device_info) if device_info else dai.Device(pipeline)
