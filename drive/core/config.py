@@ -6,6 +6,16 @@ import platform
 import glob
 import os
 
+# Load environment variables from .env file if available
+try:
+    from dotenv import load_dotenv
+    # Load .env file from project root (parent of drive/core/)
+    _env_path = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), '.env')
+    load_dotenv(_env_path)
+except ImportError:
+    # python-dotenv not installed, skip loading .env
+    pass
+
 # Motor control constants
 MAX_SPEED = 0.15
 DELTA_ACC = 0.003
@@ -123,3 +133,10 @@ PAN_TILT_DEADZONE = 0.08  # Deadzone for analog stick input
 # RTK GNSS (Point One / Quectel LG69T) constants (real default is set at runtime via device_discovery in main)
 DEFAULT_RTK_SERIAL_PORT = _detect_rtk_port()
 RTK_BAUDRATE = 460800
+
+# RTK GNSS Polaris configuration
+# Load from environment variables if available, otherwise use defaults
+POLARIS_API_KEY = os.getenv('POLARIS_API_KEY', 'be05a69030d24ec883c3a704d48dcb50')
+POLARIS_NTRIP_HOST = os.getenv('POLARIS_NTRIP_HOST', 'truertk.pointonenav.com')  # ou virtualrtk.pointonenav.com
+POLARIS_NTRIP_PORT = int(os.getenv('POLARIS_NTRIP_PORT', '2102'))  # TLS encrypted (recommandé) ou 2101 pour plaintext
+POLARIS_NTRIP_MOUNT_POINT = os.getenv('POLARIS_NTRIP_MOUNT_POINT', 'POLARIS')  # ITRF2014 global datum

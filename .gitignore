@@ -17,3 +17,8 @@ env/
 # OS
 .DS_Store
 Thumbs.db
+
+p1-host-tools/*
+
+# Environment variables
+.env

@@ -253,6 +253,51 @@ python scripts/test_rtk.py
 python scripts/test_rtk.py --port /dev/ttyUSB0
 ```
 
+**Configuration Polaris RTK**:
+
+Le récepteur RTK Point One nécessite une connexion au réseau de correction RTK Polaris pour obtenir une solution valide. La configuration Polaris est disponible dans `drive/core/config.py` :
+
+- `POLARIS_API_KEY` : Clé API Polaris pour l'authentification
+- `POLARIS_NTRIP_HOST` : Hostname du serveur NTRIP (truertk.pointonenav.com ou virtualrtk.pointonenav.com)
+- `POLARIS_NTRIP_PORT` : Port NTRIP (2102 pour TLS encrypted, 2101 pour plaintext)
+- `POLARIS_NTRIP_MOUNT_POINT` : Point de montage NTRIP (POLARIS pour ITRF2014 global datum)
+
+**Méthodes disponibles**:
+- `get_polaris_config_info()` : Retourne les informations de configuration Polaris (clé API masquée pour sécurité)
+
+**Scripts de configuration**:
+
+1. **Script bash automatique** (`scripts/setup_rtk_polaris.sh`) - RECOMMANDÉ :
+
+```bash
+# Configuration automatique complète (clone p1-host-tools, installe dépendances, configure RTK)
+./scripts/setup_rtk_polaris.sh
+
+# Avec options personnalisées
+./scripts/setup_rtk_polaris.sh --port /dev/ttyUSB1 --device-id mon-device
+
+# Vérification uniquement (sans configuration)
+./scripts/setup_rtk_polaris.sh --check-only --port /dev/ttyUSB0
+```
+
+2. **Script Python utilitaire** (`scripts/configure_rtk.py`) :
+
+```bash
+# Afficher la configuration Polaris et vérifier la connexion
+python scripts/configure_rtk.py
+
+# Afficher uniquement la configuration
+python scripts/configure_rtk.py --show-config
+
+# Vérifier la connexion au récepteur RTK
+python scripts/configure_rtk.py --check --port /dev/ttyUSB0
+
+# Afficher les instructions de configuration NTRIP
+python scripts/configure_rtk.py --instructions
+```
+
+**Note importante** : La configuration du récepteur RTK se fait généralement dans le firmware du récepteur lui-même (via l'interface web, les outils Point One, ou les commandes AT). Le script `configure_rtk.py` sert principalement de référence et d'aide à la configuration.
+
 ---
 
 ### SocketServer et DataPublisher

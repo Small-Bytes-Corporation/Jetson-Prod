@@ -126,6 +126,13 @@ class DataPublisher:
             pose = self.rtk_controller.get_latest_pose()
             imu = self.rtk_controller.get_latest_imu()
             data["rtk"] = {"pose": pose, "imu": imu}
+            
+            # Debug: log if pose is None but IMU is available (only once)
+            if pose is None and imu is not None:
+                if not hasattr(self, '_pose_none_logged'):
+                    print("[DataPublisher] Warning: RTK IMU available but pose is None")
+                    print("[DataPublisher] This may indicate that POSE messages are not being received")
+                    self._pose_none_logged = True
         
         # Return data if we have at least lidar, camera, or RTK (with pose or imu)
         has_rtk = data["rtk"] is not None and (
