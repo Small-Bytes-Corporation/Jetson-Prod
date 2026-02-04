@@ -168,9 +168,9 @@ def main():
     from drive.applications import ManualDriveApp
     
     # Resolve ports: CLI > config fallback (from ports_config.py)
-    # Resolve lidar_port: CLI > config fallback (only if enable_socket)
+    # Resolve lidar_port: CLI > config fallback (ports_config.py)
     lidar_port = args.lidar_port
-    if lidar_port is None and args.enable_socket and not args.no_lidar:
+    if lidar_port is None and not args.no_lidar:
         lidar_port = DEFAULT_LIDAR_PORT
     
     # Resolve serial_port (VESC): CLI > config fallback
