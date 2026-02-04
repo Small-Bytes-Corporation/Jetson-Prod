@@ -110,12 +110,55 @@ class ManualDriveApp:
         self.autonomous_mode = False
         self.b_button_pressed = False
         self.lidar_navigator = None
-        
+        self._init_errors = {}  # module -> error message for Failed status
+
         # Initialize lidar navigator if lidar is available
         if self.use_lidar and (self.lidar is not None or lidar_port is not None):
             from drive.core.config import AUTONOMOUS_MAX_SPEED
             self.lidar_navigator = LidarNavigator(max_speed=AUTONOMOUS_MAX_SPEED)
     
+    def _print_init_status(self):
+        """Print init status for each module (always visible, not behind debug)."""
+        # Motor
+        if not self.use_motor or self.motor is None:
+            status = "Disabled" if not self.use_motor else "Failed ({})".format(
+                self._init_errors.get("motor", "init error"))
+            print("[ManualDrive] Motor: {}".format(status))
+        else:
+            print("[ManualDrive] Motor: OK")
+        # Joystick
+        if not self.use_joystick or self.joystick is None:
+            status = "Disabled" if not self.use_joystick else "Failed ({})".format(
+                self._init_errors.get("joystick", "init error"))
+            print("[ManualDrive] Joystick: {}".format(status))
+        else:
+            print("[ManualDrive] Joystick: OK ({})".format(self.joystick.get_name()))
+        # Pan/Tilt
+        if not self.use_pan_tilt or self.pantilt is None:
+            status = "Disabled" if not self.use_pan_tilt else "Failed ({})".format(
+                self._init_errors.get("pan_tilt", "init error"))
+            print("[ManualDrive] Pan/Tilt: {}".format(status))
+        else:
+            print("[ManualDrive] Pan/Tilt: OK")
+        # Lidar
+        if not self.use_lidar:
+            print("[ManualDrive] Lidar: Disabled")
+        elif self.lidar is None:
+            print("[ManualDrive] Lidar: Failed ({})".format(
+                self._init_errors.get("lidar", "port {} unavailable".format(self.lidar_port or "?"))))
+        else:
+            print("[ManualDrive] Lidar: OK ({})".format(self.lidar_port))
+        # Camera
+        if not self.use_camera:
+            print("[ManualDrive] Camera: Disabled")
+        elif self.camera is None:
+            print("[ManualDrive] Camera: Failed ({})".format(
+                self._init_errors.get("camera", "init error")))
+        elif self.camera.is_available():
+            print("[ManualDrive] Camera: OK")
+        else:
+            print("[ManualDrive] Camera: Failed (not available)")
+
     def _handle_exit(self):
         """
         Check if exit is requested (BACK + START buttons).
@@ -171,23 +214,20 @@ class ManualDriveApp:
         if self.use_camera and self.camera is not None:
             try:
                 self.camera.initialize()
-                print("[ManualDrive] Camera initialized successfully")
             except Exception as e:
-                print(f"[ManualDrive] Warning: Failed to initialize camera: {e}")
+                self._init_errors["camera"] = str(e)
                 self.camera = None
                 if self.data_publisher is not None:
                     self.data_publisher.camera_controller = None
         if self.use_lidar and self.lidar is not None:
             try:
                 if not self.lidar.initialize():
-                    print("[ManualDrive] Warning: Lidar initialization failed")
+                    self._init_errors["lidar"] = "init returned False"
                     self.lidar = None
                     if self.data_publisher is not None:
                         self.data_publisher.lidar_controller = None
-                else:
-                    print("[ManualDrive] Lidar initialized successfully")
             except Exception as e:
-                print(f"[ManualDrive] Warning: Failed to initialize lidar: {e}")
+                self._init_errors["lidar"] = str(e)
                 self.lidar = None
                 if self.data_publisher is not None:
                     self.data_publisher.lidar_controller = None
@@ -212,7 +252,7 @@ class ManualDriveApp:
                 try:
                     self.motor.initialize()
                 except Exception as e:
-                    print(f"[ManualDrive] Warning: Failed to initialize motor: {e}")
+                    self._init_errors["motor"] = str(e)
                     self.motor = None
                     self.use_motor = False
             else:
@@ -223,7 +263,7 @@ class ManualDriveApp:
                 try:
                     self.joystick.initialize()
                 except Exception as e:
-                    print(f"[ManualDrive] Warning: Failed to initialize joystick: {e}")
+                    self._init_errors["joystick"] = str(e)
                     self.joystick = None
                     self.use_joystick = False
             else:
@@ -234,7 +274,7 @@ class ManualDriveApp:
                 try:
                     self.pantilt.initialize()
                 except Exception as e:
-                    print(f"[ManualDrive] Warning: Failed to initialize pan/tilt: {e}")
+                    self._init_errors["pan_tilt"] = str(e)
                     self.pantilt = None
                     self.use_pan_tilt = False
             else:
@@ -245,20 +285,30 @@ class ManualDriveApp:
             if not self.use_joystick or self.joystick is None:
                 pygame.init()
             
-            # Initialize lidar in main process for autonomous navigation if not already initialized
-            if self.use_lidar and self.lidar is None and self.lidar_port is not None:
-                print("[ManualDrive] Initializing lidar in main process for autonomous navigation...")
+            # Initialize lidar: either in _initialize_sensors (when enable_socket) or here
+            if self.use_lidar and self.lidar is not None and not self.lidar.is_available():
+                try:
+                    if not self.lidar.initialize():
+                        self._init_errors["lidar"] = "init returned False"
+                        self.lidar = None
+                        if self.data_publisher is not None:
+                            self.data_publisher.lidar_controller = None
+                except Exception as e:
+                    self._init_errors["lidar"] = str(e)
+                    self.lidar = None
+                    if self.data_publisher is not None:
+                        self.data_publisher.lidar_controller = None
+            elif self.use_lidar and self.lidar is None and self.lidar_port is not None:
                 self.lidar = LidarController(serial_port=self.lidar_port, debug=self.debug_lidar)
                 try:
                     if not self.lidar.initialize():
-                        print("[ManualDrive] Warning: Lidar initialization failed for autonomous navigation")
+                        self._init_errors["lidar"] = "init returned False"
                         self.lidar = None
-                    else:
-                        print("[ManualDrive] Lidar initialized for autonomous navigation")
                 except Exception as e:
-                    print(f"[ManualDrive] Warning: Failed to initialize lidar for autonomous navigation: {e}")
+                    self._init_errors["lidar"] = str(e)
                     self.lidar = None
-            
+
+            self._print_init_status()
             print("[ManualDrive] Ready! Use BACK+START to exit. Press B to toggle autonomous/manual mode.")
 
             last_status_print = 0.0
