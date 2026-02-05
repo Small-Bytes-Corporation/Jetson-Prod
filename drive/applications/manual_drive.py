@@ -368,6 +368,7 @@ class ManualDriveApp:
                 acceleration = 0.0
                 steering = 0.0
                 lidar_scan = None
+                should_send_motor_commands = True
 
                 # Get lidar scan for dashboard (even in manual mode)
                 if self.lidar is not None and self.lidar.is_available():
@@ -377,10 +378,12 @@ class ManualDriveApp:
                 if self.autonomous_mode and self.lidar is not None and self.lidar_navigator is not None:
                     if lidar_scan is not None and len(lidar_scan) > 0:
                         acceleration, steering = self.lidar_navigator.compute_commands(lidar_scan)
+                        should_send_motor_commands = True
                     else:
-                        # No lidar data, stop
+                        # No lidar data: don't call navigation and don't send commands to motor
                         acceleration = 0.0
                         steering = 0.0
+                        should_send_motor_commands = False
                 
                 # Manual mode: use joystick
                 else:
@@ -394,7 +397,7 @@ class ManualDriveApp:
                     if self.use_joystick and self.joystick is not None:
                         steering = self.joystick.get_steering()
 
-                if self.use_motor and self.motor is not None:
+                if self.use_motor and self.motor is not None and should_send_motor_commands:
                     self.motor.set_commands(acceleration, steering)
 
                 if self.use_pan_tilt and self.pantilt is not None and self.use_joystick and self.joystick is not None:
