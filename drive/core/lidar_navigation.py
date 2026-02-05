@@ -17,6 +17,7 @@ from .config import (
 # Constants for preprocessing
 MAX_LIDAR_DIST = 3.0  # Cap distances to 3m to view open space uniformly
 ROBOT_BUBBLE_RADIUS = 0.35  # meters (Robot radius + Safety margin)
+LIDAR_ROTATION_OFFSET = -90.0  # degrees: lidar is rotated 90° to the right, so subtract 90° to correct
 
 class LidarNavigator:
     """
@@ -88,8 +89,12 @@ class LidarNavigator:
             angle = p['angle']
             dist = p['distance']
             
+            # Apply rotation correction (lidar is rotated 90° to the right)
+            angle = angle + LIDAR_ROTATION_OFFSET
+            
             # Normalize angle -180 to 180
             if angle > 180: angle -= 360
+            if angle <= -180: angle += 360
             
             if self.field_of_view[0] <= angle <= self.field_of_view[1]:
                 # CLAMP: Treat everything > 3m as 3m. 
