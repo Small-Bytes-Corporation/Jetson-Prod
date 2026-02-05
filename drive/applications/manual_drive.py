@@ -334,8 +334,10 @@ class ManualDriveApp:
                     camera_ready = self.camera.verify_ready()
                     if not camera_ready:
                         # Camera initialized but cannot read frames - this is a problem but not fatal
-                        log_error("[Camera] Warning: Camera initialized but cannot read frames. Check USB connection and camera pipeline.")
-                        # Don't prevent DataPublisher from starting, but it may not get camera data
+                        # The camera might need more time to stabilize, so we'll allow it to start
+                        # and check again later in the main loop
+                        log_error("[Camera] Warning: Camera initialized but cannot read frames yet. Pipeline may need more time to stabilize.")
+                        # Don't prevent DataPublisher from starting, but it may not get camera data initially
                         camera_ready = True  # Allow DataPublisher to start anyway
                 else:
                     log_error("[ManualDrive] Warning: Camera initialization failed. DataPublisher will start without camera.")
@@ -447,6 +449,8 @@ class ManualDriveApp:
                 self.dashboard.set_initializing(False)
 
             last_status_print = 0.0
+            last_camera_check = 0.0
+            camera_check_interval = 2.0  # Check camera every 2 seconds
 
             while self.running:
                 # Process pygame events (needed for joystick input when enabled)
@@ -466,6 +470,19 @@ class ManualDriveApp:
                 lidar_scan = None
                 should_send_motor_commands = True
 
+                # Periodically check if camera can now read frames (it might need time to stabilize)
+                now = time.monotonic()
+                if self.use_camera and self.camera is not None and now - last_camera_check >= camera_check_interval:
+                    last_camera_check = now
+                    # Try to read a frame to update the can_read_frames flag
+                    if self.camera.is_available() and not self.camera.can_read_frames():
+                        # Try once to see if camera can now read frames
+                        test_frame = self.camera.get_frame()
+                        if test_frame is not None and self.dashboard is not None:
+                            # Camera started working - remove the error from dashboard
+                            # (we can't easily remove specific errors, but new frames will update the status)
+                            pass
+                
                 # Get lidar scan for dashboard (even in manual mode)
                 if self.lidar is not None and self.lidar.is_available():
                     lidar_scan = self.lidar.get_scan()

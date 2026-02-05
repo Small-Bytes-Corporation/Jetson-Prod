@@ -43,6 +43,7 @@ class CameraController:
         self._initialized = False
         self._use_v3 = _is_depthai_v3(dai)
         self._frame_lock = threading.Lock()  # Lock for thread-safe frame access
+        self._can_read_frames = False  # Track if camera can actually read frames
     
     def initialize(self):
         """
@@ -126,7 +127,11 @@ class CameraController:
                     return None
                 
                 # Convert to OpenCV frame - may raise exceptions on communication errors
-                return frame_in.getCvFrame()
+                frame = frame_in.getCvFrame()
+                # If we successfully got a frame, mark that we can read frames
+                if frame is not None:
+                    self._can_read_frames = True
+                return frame
             except (RuntimeError, Exception) as e:
                 # Handle X_LINK_ERROR and other DepthAI communication errors
                 # On Jetson, USB communication issues can cause exceptions
@@ -171,15 +176,26 @@ class CameraController:
         while attempts < max_attempts and (time.time() - start_time) < timeout:
             frame = self.get_frame()
             if frame is not None:
+                self._can_read_frames = True
                 if self.debug:
                     print(f"[Camera] Verified ready: successfully read frame after {attempts + 1} attempt(s)")
                 return True
             attempts += 1
             time.sleep(0.1)  # Small delay between attempts
         
+        self._can_read_frames = False
         if self.debug:
             print(f"[Camera] Warning: Could not verify camera readiness after {attempts} attempts")
         return False
+    
+    def can_read_frames(self):
+        """
+        Check if camera can actually read frames (not just initialized).
+        
+        Returns:
+            bool: True if camera has successfully read at least one frame, False otherwise.
+        """
+        return self._can_read_frames
     
     def stop(self):
         """Stop the camera and clean up resources."""

@@ -171,6 +171,11 @@ class Dashboard:
         camera_info = ""
         if self.app.camera and hasattr(self.app.camera, 'is_available') and self.app.camera.is_available():
             camera_info = f" ({self.app.camera.width}x{self.app.camera.height})"
+            # Check if camera can actually read frames
+            if hasattr(self.app.camera, 'can_read_frames') and not self.app.camera.can_read_frames():
+                # Camera is initialized but cannot read frames - show warning status
+                status = "Warning"
+                color = "yellow"
         table.add_row("Camera", Text(status + camera_info, style=color))
         
         # PanTilt
