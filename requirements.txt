@@ -19,3 +19,4 @@ urllib3>=1.21.1
 websockets>=9.0
 psutil>=5.9.4
 pyvesc @ git+https://github.com/LiamBindle/pyvesc.git@d2f2076afe91dafa920a38a437528819697e05e3
+rich>=10.0.0,<11.0.0

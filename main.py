@@ -138,6 +138,11 @@ def main():
 
     debug_grp = parser.add_argument_group("Debug")
     debug_grp.add_argument(
+        "--dashboard",
+        action="store_true",
+        help="Enable terminal dashboard showing all module status and debug info (steering, throttle, joystick, camera, pantilt, motor, lidar, socket)",
+    )
+    debug_grp.add_argument(
         "--debug-pan-tilt",
         action="store_true",
         help="Print pan/tilt debug messages",
@@ -198,6 +203,15 @@ def main():
     try:
         print("[Main] Starting manual drive mode...")
         
+        # If dashboard is enabled, activate all debug flags automatically
+        dashboard_enabled = args.dashboard
+        if dashboard_enabled:
+            args.debug_pan_tilt = True
+            args.debug_joystick = True
+            args.debug_lidar = True
+            args.debug_camera = True
+            args.socket_debug = True
+        
         app = ManualDriveApp(
             max_speed=args.max_speed,
             serial_port=serial_port,
@@ -216,6 +230,7 @@ def main():
             debug_joystick=args.debug_joystick,
             debug_lidar=args.debug_lidar,
             debug_camera=args.debug_camera,
+            dashboard=dashboard_enabled,
         )
         
         # Run the application

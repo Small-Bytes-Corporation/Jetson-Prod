@@ -82,7 +82,11 @@ class LidarController:
                 # Si un tour est fini, on le retourne
                 if self.last_scan:
                     scan_to_return = self.last_scan
-                    self.last_scan = [] 
+                    self.last_scan = []
+                    # Supprimé les prints détaillés (trop verbeux, même en mode debug)
+                    # Les informations sont disponibles dans le dashboard si activé
+                    if self.debug:
+                        print("[Lidar] Scan: {} points".format(len(scan_to_return)))
                     return scan_to_return
             
             return None
