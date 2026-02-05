@@ -107,10 +107,31 @@ class CameraController:
         """
         if not self._initialized or self.q_rgb is None:
             return None
-        frame_in = self.q_rgb.tryGet() if hasattr(self.q_rgb, "tryGet") else self.q_rgb.get()
-        if frame_in is None:
+        try:
+            # Try to get frame from queue (non-blocking if tryGet available)
+            if hasattr(self.q_rgb, "tryGet"):
+                frame_in = self.q_rgb.tryGet()
+            else:
+                # Fallback to blocking get() - may raise exceptions on Jetson
+                frame_in = self.q_rgb.get()
+            
+            if frame_in is None:
+                return None
+            
+            # Convert to OpenCV frame - may raise exceptions on communication errors
+            return frame_in.getCvFrame()
+        except (RuntimeError, Exception) as e:
+            # Handle X_LINK_ERROR and other DepthAI communication errors
+            # On Jetson, USB communication issues can cause exceptions
+            # Return None to allow the system to continue functioning
+            if self.debug:
+                error_msg = str(e)
+                # Check if it's an X_LINK_ERROR specifically
+                if "X_LINK_ERROR" in error_msg or "rgb" in error_msg.lower():
+                    print(f"[Camera] Communication error reading frame: {e}")
+                else:
+                    print(f"[Camera] Error reading frame: {e}")
             return None
-        return frame_in.getCvFrame()
     
     def is_available(self):
         """

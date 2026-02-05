@@ -152,8 +152,7 @@ class PanTiltController:
         """
         if not self._initialized:
             return
-        if self.debug:
-            print("[PanTilt] analog:", pan_axis, tilt_axis)
+        # Supprimé le print verbeux (trop fréquent, informations disponibles dans le dashboard)
         
         # 1. Application Deadzone
         pan = 0.0 if abs(pan_axis) < PAN_TILT_DEADZONE else pan_axis
