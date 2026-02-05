@@ -79,7 +79,12 @@ class DataPublisher:
                 time.sleep(self.sleep_time)
             
             except Exception as e:
-                print(f"[DataPublisher] Error in publish loop: {e}")
+                error_msg = str(e)
+                # Check for communication errors that might indicate device issues
+                if "X_LINK_ERROR" in error_msg or "Communication" in error_msg or "rgb" in error_msg.lower():
+                    print(f"[DataPublisher] Error in publish loop: Communication exception - possible device error/misconfiguration. Original message: '{error_msg}'")
+                else:
+                    print(f"[DataPublisher] Error in publish loop: {e}")
                 time.sleep(self.sleep_time)
     
     def _collect_data(self):
