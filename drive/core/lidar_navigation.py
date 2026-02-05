@@ -1,12 +1,10 @@
 """
 Advanced Navigation Algorithm - State Machine based Follow the Gap.
-Refactored to include specific Lidar offsets and motor protection logic.
+Refactored to include physical robot dimensions and motor protection.
 
-Features:
-- FSM (Finite State Machine) for managing Forward/Stop/Reverse transitions.
-- MANDATORY STOP before changing gears to protect VESC/Motor.
-- Smart Reverse: Inverts steering to perform a 3-point turn maneuver.
-- Robust Gap Finding: Uses width-based gap selection and obstacle inflation.
+Physical Constraints:
+- Lidar is mounted 4cm from the rear and 16cm from the front.
+- Lidar is rotated 90 degrees relative to robot frame.
 """
 
 import math
@@ -19,16 +17,23 @@ from .config import (
     AUTONOMOUS_FIELD_OF_VIEW, AUTONOMOUS_LOOKAHEAD_DISTANCE, AUTONOMOUS_GAP_THRESHOLD
 )
 
-# --- Constants ---
-MAX_LIDAR_DIST = 3.0           # Cap distances to 3m to view open space uniformly
-ROBOT_BUBBLE_RADIUS = 0.35     # meters (Robot radius + Safety margin)
-LIDAR_ROTATION_OFFSET = 90.0   # degrees: correction for lidar mounting
+# --- Physical Dimensions ---
+LIDAR_TO_FRONT = 0.16          # 16 cm du lidar au nez de la voiture
+LIDAR_TO_REAR = 0.04           # 4 cm du lidar à l'arrière
+SAFETY_BUFFER = 0.15           # 15 cm de marge d'arrêt supplémentaire
 
-# --- Maneuver Constants ---
-CRITICAL_DISTANCE = 0.30       # If obstacle closer than this, trigger emergency maneuver
-STOP_WAIT_TIME = 1.0           # Seconds to wait at 0 speed before reversing (Engine Protection)
-REVERSE_DURATION = 1.5         # Seconds to drive in reverse
-REVERSE_SPEED = -0.15          # Speed for reverse gear
+# --- Tuning Parameters ---
+MAX_LIDAR_DIST = 3.0           # On ignore ce qui est au delà de 3m
+# Le rayon de la bulle doit couvrir la partie la plus longue (le devant) + la largeur
+ROBOT_BUBBLE_RADIUS = 0.40     # Rayon de sécurité (doit être > LIDAR_TO_FRONT + largeur/2)
+LIDAR_ROTATION_OFFSET = 90.0   # Correction de rotation du lidar
+
+# --- Maneuver Logic ---
+# Distance déclenchant l'arrêt d'urgence : Longueur nez + Marge
+CRITICAL_DISTANCE = LIDAR_TO_FRONT + SAFETY_BUFFER  # ex: 0.16 + 0.15 = 0.31m
+STOP_WAIT_TIME = 1.0           # Temps d'arrêt OBLIGATOIRE (protection VESC)
+REVERSE_DURATION = 1.5         # Temps de marche arrière
+REVERSE_SPEED = -0.15          # Vitesse de recul
 
 class NavState(Enum):
     FORWARD = auto()
@@ -63,8 +68,8 @@ class LidarNavigator:
         
         # Smoothing and Memory
         self.last_steering = 0.0
-        self.alpha_steering = 0.6  # Smoothing factor
-        self.last_gap_center_steering = 0.0 # To remember direction for reversing
+        self.alpha_steering = 0.6
+        self.last_gap_center_steering = 0.0
 
     def compute_commands(self, lidar_scan: List[Dict]) -> Tuple[float, float]:
         """
@@ -73,14 +78,14 @@ class LidarNavigator:
         """
         current_time = time.monotonic()
         
-        # 1. Preprocess Lidar Data (Common to all states)
-        # We use this to detect obstacles regardless of current state
+        # 1. Preprocess Lidar Data
+        # Returns array [[angle, dist], ...] sorted by angle
         ranges = self._preprocess_scan(lidar_scan)
         
         if len(ranges) == 0:
             return 0.0, 0.0
 
-        # Calculate useful metrics
+        # Calculate metrics
         closest_idx = np.argmin(ranges[:, 1])
         min_dist = ranges[closest_idx, 1]
         
@@ -91,9 +96,10 @@ class LidarNavigator:
 
         # STATE 1: FORWARD DRIVING
         if self.state == NavState.FORWARD:
-            # Check for blockage
+            # Check for blockage using the physical dimensions
+            # If closest object is closer than (Nez + Marge), STOP.
             if min_dist < CRITICAL_DISTANCE:
-                print(f"[Nav] Blocked ({min_dist:.2f}m)! Emergency Stop.")
+                print(f"[Nav] Obstacle at {min_dist:.2f}m (Front is {LIDAR_TO_FRONT}m). Emergency Stop.")
                 self.state = NavState.BRAKING_TO_REVERSE
                 self.state_timer = current_time
                 acceleration = 0.0
@@ -105,15 +111,15 @@ class LidarNavigator:
                 steering = (self.alpha_steering * steering) + \
                            ((1.0 - self.alpha_steering) * self.last_steering)
                 
-                # Save steering intention for potential reverse maneuver
+                # Save steering intention
                 self.last_gap_center_steering = steering
 
-        # STATE 2: BRAKING BEFORE REVERSE (Protection)
+        # STATE 2: BRAKING BEFORE REVERSE
         elif self.state == NavState.BRAKING_TO_REVERSE:
             acceleration = 0.0
-            steering = self.last_steering # Hold steering
+            steering = self.last_steering
             
-            # Wait for wheels to stop completely
+            # Mandatory Wait
             if (current_time - self.state_timer) > STOP_WAIT_TIME:
                 print("[Nav] Engaging Reverse...")
                 self.state = NavState.REVERSING
@@ -123,11 +129,8 @@ class LidarNavigator:
         elif self.state == NavState.REVERSING:
             acceleration = REVERSE_SPEED
             
-            # Smart Reverse: Invert the previous steering intent.
-            # If we wanted to go Left, obstacle is likely ahead/right.
-            # Reversing with Right steering pulls the nose away.
+            # Smart Reverse: Invert steering to un-stuck the nose
             steering = -1.0 * np.sign(self.last_gap_center_steering)
-            # Avoid jitter if straight
             if abs(steering) < 0.1: steering = 0.0
             
             # Exit condition (Time based)
@@ -135,22 +138,22 @@ class LidarNavigator:
                 self.state = NavState.BRAKING_TO_FORWARD
                 self.state_timer = current_time
 
-        # STATE 4: BRAKING BEFORE FORWARD (Protection)
+        # STATE 4: BRAKING BEFORE FORWARD
         elif self.state == NavState.BRAKING_TO_FORWARD:
             acceleration = 0.0
             steering = self.last_steering
             
+            # Mandatory Wait
             if (current_time - self.state_timer) > STOP_WAIT_TIME:
                 print("[Nav] Engaging Forward...")
                 self.state = NavState.FORWARD
                 self.last_steering = 0.0 # Reset smoothing
 
-        # Store for next loop
         self.last_steering = steering
         return acceleration, steering
 
     # --------------------------------------------------------------------------
-    # CORE ALGORITHM (Follow The Gap)
+    # CORE ALGORITHM
     # --------------------------------------------------------------------------
 
     def _logic_follow_the_gap(self, ranges: np.ndarray, closest_idx: int, min_dist: float) -> Tuple[float, float]:
@@ -176,15 +179,12 @@ class LidarNavigator:
     # --------------------------------------------------------------------------
 
     def _preprocess_scan(self, scan: List[Dict]) -> np.ndarray:
-        """
-        Convert list of dicts to numpy array, filter FOV, apply rotation offset and clamp.
-        """
         data = []
         for p in scan:
             angle = p['angle']
             dist = p['distance']
             
-            # Apply rotation correction (User specific logic)
+            # Apply rotation correction
             angle = angle + LIDAR_ROTATION_OFFSET
             
             # Normalize angle -180 to 180
@@ -192,7 +192,7 @@ class LidarNavigator:
             if angle <= -180: angle += 360
             
             if self.field_of_view[0] <= angle <= self.field_of_view[1]:
-                # CLAMP: Treat everything > 3m as 3m
+                # CLAMP
                 if dist > MAX_LIDAR_DIST:
                     dist = MAX_LIDAR_DIST
                 # Filter noise
@@ -204,16 +204,15 @@ class LidarNavigator:
         if not data:
             return np.array([])
             
-        # Sort by angle
         arr = np.array(data)
         return arr[arr[:, 0].argsort()]
 
     def _apply_safety_bubble(self, ranges: np.ndarray, closest_idx: int, min_dist: float) -> np.ndarray:
-        """Zero out data points within robot radius."""
         proc_ranges = ranges.copy()
         
         if min_dist < MAX_LIDAR_DIST:
             if min_dist < 0.1: min_dist = 0.1
+            # We assume ROBOT_BUBBLE_RADIUS covers the physical size including offset
             angle_radius_rad = np.arctan(ROBOT_BUBBLE_RADIUS / min_dist)
             angle_radius_deg = np.degrees(angle_radius_rad)
             
@@ -225,12 +224,9 @@ class LidarNavigator:
         return proc_ranges
 
     def _find_max_gap(self, ranges: np.ndarray) -> Tuple[int, int]:
-        """Find the widest consecutive gap."""
         mask = ranges[:, 1] > self.gap_threshold
-        
         padded = np.concatenate(([False], mask, [False]))
         diff = np.diff(padded.astype(int))
-        
         starts = np.where(diff == 1)[0]
         ends = np.where(diff == -1)[0] - 1
         
@@ -239,11 +235,9 @@ class LidarNavigator:
             
         lengths = ends - starts
         longest_idx = np.argmax(lengths)
-        
         return starts[longest_idx], ends[longest_idx]
 
     def _find_best_point(self, ranges: np.ndarray, start: int, end: int) -> float:
-        """Aim for center of the gap."""
         gap_points = ranges[start:end+1]
         if len(gap_points) == 0:
             return 0.0
@@ -254,19 +248,15 @@ class LidarNavigator:
         return max(-1.0, min(1.0, steer))
 
     def _compute_speed(self, closest_dist: float, steer_effort: float) -> float:
-        """
-        Speed logic:
-        1. Slow down if obstacles are close.
-        2. Slow down if steering hard (turning).
-        """
-        # Note: We rely on State Machine for critical stops. 
-        # Here we just modulate speed for smooth driving.
-        if closest_dist < self.safety_distance:
+        # Stop safely before hitting Critical Distance
+        if closest_dist < CRITICAL_DISTANCE:
             return 0.0
             
-        dist_factor = np.clip((closest_dist - self.safety_distance), 0.0, 1.0)
+        # Scale speed based on distance relative to Critical Distance
+        # 0.0 speed at Critical Distance, Max speed at Safety Distance
+        dist_factor = np.clip((closest_dist - CRITICAL_DISTANCE) / (self.safety_distance), 0.0, 1.0)
+        
         turn_factor = 1.0 - (0.6 * steer_effort)
         
         target_speed = self.max_speed * dist_factor * turn_factor
-        
         return max(self.min_speed, target_speed)
