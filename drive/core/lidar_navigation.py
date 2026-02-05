@@ -1,12 +1,9 @@
 """
 Navigation algorithm using lidar data - Follow the Gap algorithm.
-
-The Follow the Gap algorithm is a simple and effective reactive navigation method:
-1. Preprocess lidar scan data
-2. Find the closest obstacle point
-3. Create a safety bubble around it
-4. Find the largest gap (free space)
-5. Drive toward the center of the gap
+Refactored for robustness:
+1. True obstacle inflation (Bubble) to account for robot radius.
+2. Gap selection based on width (passability), not depth.
+3. Range clamping to prevent chasing distant noise.
 """
 
 import math
@@ -17,6 +14,9 @@ from .config import (
     AUTONOMOUS_FIELD_OF_VIEW, AUTONOMOUS_LOOKAHEAD_DISTANCE, AUTONOMOUS_GAP_THRESHOLD
 )
 
+# Constants for preprocessing
+MAX_LIDAR_DIST = 3.0  # Cap distances to 3m to view open space uniformly
+ROBOT_BUBBLE_RADIUS = 0.35  # meters (Robot radius + Safety margin)
 
 class LidarNavigator:
     """
@@ -32,17 +32,6 @@ class LidarNavigator:
         lookahead_distance: float = AUTONOMOUS_LOOKAHEAD_DISTANCE,
         gap_threshold: float = AUTONOMOUS_GAP_THRESHOLD,
     ):
-        """
-        Initialize the lidar navigator.
-        
-        Args:
-            max_speed: Maximum forward speed (0.0 to 1.0)
-            min_speed: Minimum forward speed
-            safety_distance: Radius of safety bubble around obstacles (meters)
-            field_of_view: Tuple (left_limit, right_limit) in degrees relative to front
-            lookahead_distance: Preferred distance to look ahead (meters)
-            gap_threshold: Minimum gap size to consider (meters)
-        """
         self.max_speed = max_speed
         self.min_speed = min_speed
         self.safety_distance = safety_distance
@@ -50,193 +39,167 @@ class LidarNavigator:
         self.lookahead_distance = lookahead_distance
         self.gap_threshold = gap_threshold
         
+        # Smoothing variables
+        self.last_steering = 0.0
+        self.alpha_steering = 0.7  # Smoothing factor (0.0 = no new data, 1.0 = no history)
+
     def compute_commands(self, lidar_scan: List[Dict]) -> Tuple[float, float]:
+        if not lidar_scan:
+            return 0.0, 0.0
+        
+        # 1. Preprocess: Filter FOV and limit max range
+        # ranges elements: [angle_deg, distance_m]
+        ranges = self._preprocess_scan(lidar_scan)
+        if ranges.shape[0] == 0:
+            return 0.0, 0.0
+
+        # 2. Find nearest obstacle
+        closest_idx = np.argmin(ranges[:, 1])
+        closest_dist = ranges[closest_idx, 1]
+        
+        # 3. Create Safety Bubble (Obstacle Inflation)
+        # We zero out distances inside the bubble so they are treated as walls
+        proc_ranges = self._apply_safety_bubble(ranges, closest_idx, closest_dist)
+        
+        # 4. Find the max gap (based on WIDTH, not depth)
+        gap_start, gap_end = self._find_max_gap(proc_ranges)
+        
+        # 5. Find target point in the chosen gap
+        target_angle = self._find_best_point(proc_ranges, gap_start, gap_end)
+        
+        # 6. Compute commands
+        steering_raw = self._angle_to_steering(target_angle)
+        
+        # Apply smoothing to steering
+        self.last_steering = (self.alpha_steering * steering_raw) + \
+                             ((1.0 - self.alpha_steering) * self.last_steering)
+        
+        speed = self._compute_speed(closest_dist, abs(self.last_steering))
+        
+        return speed, self.last_steering
+
+    def _preprocess_scan(self, scan: List[Dict]) -> np.ndarray:
         """
-        Compute acceleration and steering commands from lidar scan.
-        
-        Args:
-            lidar_scan: List of dicts with 'angle' (degrees), 'distance' (meters), 'intensity'
-            
-        Returns:
-            Tuple (acceleration, steering) where:
-            - acceleration: float between -1.0 (reverse) and 1.0 (forward)
-            - steering: float between -1.0 (left) and 1.0 (right)
+        Convert list of dicts to numpy array, filter FOV, and clamp max distances.
         """
-        if not lidar_scan or len(lidar_scan) == 0:
-            # No data, stop
-            return 0.0, 0.0
-        
-        # Step 1: Filter and sort scan data by angle
-        filtered_scan = self._filter_scan(lidar_scan)
-        
-        if not filtered_scan:
-            return 0.0, 0.0
-        
-        # Step 2: Convert to array format (angle, distance)
-        scan_array = self._scan_to_array(filtered_scan)
-        
-        # Step 3: Find closest point
-        closest_idx = np.argmin(scan_array[:, 1])
-        closest_distance = scan_array[closest_idx, 1]
-        
-        # Step 4: Create safety bubble (set distances < safety_distance to 0)
-        safe_scan = scan_array.copy()
-        for i in range(len(safe_scan)):
-            if safe_scan[i, 1] < self.safety_distance:
-                safe_scan[i, 1] = 0.0
-        
-        # Step 5: Find largest gap
-        gap_start, gap_end = self._find_largest_gap(safe_scan)
-        
-        if gap_start is None or gap_end is None:
-            # No gap found, stop
-            return 0.0, 0.0
-        
-        # Step 6: Find best point in gap (farthest point or center based on lookahead)
-        target_angle = self._find_target_angle(safe_scan, gap_start, gap_end)
-        
-        # Step 7: Compute steering (normalize angle to [-1, 1])
-        # Front = 0°, Left = negative, Right = positive
-        steering = self._angle_to_steering(target_angle)
-        
-        # Step 8: Compute speed based on closest obstacle and gap size
-        acceleration = self._compute_speed(safe_scan, gap_start, gap_end, closest_distance)
-        
-        return acceleration, steering
-    
-    def _filter_scan(self, scan: List[Dict]) -> List[Dict]:
-        """Filter scan to field of view and valid distances."""
-        filtered = []
-        for point in scan:
-            angle = point['angle']
-            distance = point['distance']
+        # Extract and sort by angle
+        data = []
+        for p in scan:
+            angle = p['angle']
+            dist = p['distance']
             
-            # Convert angle to [-180, 180] relative to front (0°)
-            if angle > 180:
-                angle = angle - 360
+            # Normalize angle -180 to 180
+            if angle > 180: angle -= 360
             
-            # Filter by field of view
             if self.field_of_view[0] <= angle <= self.field_of_view[1]:
-                # Filter valid distances
-                if 0.1 < distance < 10.0:  # Valid range
-                    filtered.append({
-                        'angle': angle,
-                        'distance': distance,
-                        'intensity': point.get('intensity', 0)
-                    })
+                # CLAMP: Treat everything > 3m as 3m. 
+                # This makes "open space" look like a uniform wall at 3m.
+                if dist > MAX_LIDAR_DIST:
+                    dist = MAX_LIDAR_DIST
+                # Filter noise
+                if dist < 0.1:
+                    dist = 0.0
+                
+                data.append([angle, dist])
         
-        return filtered
-    
-    def _scan_to_array(self, scan: List[Dict]) -> np.ndarray:
-        """Convert scan list to numpy array sorted by angle."""
-        # Sort by angle
-        sorted_scan = sorted(scan, key=lambda x: x['angle'])
-        
-        # Convert to array: [angle, distance]
-        array = np.array([[p['angle'], p['distance']] for p in sorted_scan])
-        
-        return array
-    
-    def _find_largest_gap(self, scan_array: np.ndarray) -> Tuple[Optional[int], Optional[int]]:
+        if not data:
+            return np.array([])
+            
+        # Sort by angle to ensure indices correspond to physical adjacency
+        arr = np.array(data)
+        arr = arr[arr[:, 0].argsort()]
+        return arr
+
+    def _apply_safety_bubble(self, ranges: np.ndarray, closest_idx: int, min_dist: float) -> np.ndarray:
         """
-        Find the largest consecutive gap (non-zero distances) in the scan.
-        
-        Returns:
-            Tuple (start_idx, end_idx) of the largest gap, or (None, None) if no gap found.
+        Zero out data points within a radius of the closest obstacle 
+        to account for robot width.
         """
-        gaps = []
-        gap_start = None
+        proc_ranges = ranges.copy()
         
-        for i in range(len(scan_array)):
-            if scan_array[i, 1] > self.gap_threshold:  # Valid gap point
-                if gap_start is None:
-                    gap_start = i
-            else:  # Obstacle or invalid
-                if gap_start is not None:
-                    # Gap ends
-                    gap_size = scan_array[gap_start:i, 1].sum()  # Sum of distances in gap
-                    gaps.append((gap_start, i - 1, gap_size))
-                    gap_start = None
-        
-        # Handle gap that extends to the end
-        if gap_start is not None:
-            gap_size = scan_array[gap_start:, 1].sum()
-            gaps.append((gap_start, len(scan_array) - 1, gap_size))
-        
-        if not gaps:
-            return None, None
-        
-        # Find largest gap
-        largest_gap = max(gaps, key=lambda x: x[2])
-        return largest_gap[0], largest_gap[1]
-    
-    def _find_target_angle(self, scan_array: np.ndarray, gap_start: int, gap_end: int) -> float:
+        # If obstacle is too close, create a bubble
+        if min_dist < MAX_LIDAR_DIST:
+            # Calculate angle required to cover the radius
+            # arc = radius / distance -> angle = arctan(radius/dist)
+            if min_dist < 0.1: min_dist = 0.1
+            angle_radius_rad = np.arctan(ROBOT_BUBBLE_RADIUS / min_dist)
+            angle_radius_deg = np.degrees(angle_radius_rad)
+            
+            # Identify indices covered by this angle
+            closest_angle = ranges[closest_idx, 0]
+            
+            # Simple thresholding on angle difference
+            # (Works because we sorted the array in preprocess)
+            mask = np.abs(proc_ranges[:, 0] - closest_angle) < angle_radius_deg
+            
+            # Set distances to 0 (wall) for points inside the bubble
+            proc_ranges[mask, 1] = 0.0
+            
+        return proc_ranges
+
+    def _find_max_gap(self, ranges: np.ndarray) -> Tuple[int, int]:
         """
-        Find the target angle within the gap.
-        Uses lookahead_distance to prefer points at preferred distance.
+        Find the widest consecutive gap of non-zero points.
+        Returns start and end indices.
         """
-        gap_points = scan_array[gap_start:gap_end + 1]
+        # Create a boolean mask where dist > threshold
+        # We use a threshold slightly above 0 because of bubble zeroing
+        mask = ranges[:, 1] > self.gap_threshold
+        
+        # Find consecutive sequences
+        # diff(mask) gives 1 where it starts, -1 where it ends
+        # We pad to detect start/end at array edges
+        padded = np.concatenate(([False], mask, [False]))
+        diff = np.diff(padded.astype(int))
+        
+        starts = np.where(diff == 1)[0]
+        ends = np.where(diff == -1)[0] - 1
+        
+        if len(starts) == 0:
+            return 0, len(ranges) - 1 # No gap found, return whole range (panic)
+            
+        # Select gap with largest number of points (widest)
+        # Previous code used sum() (deepest), which is dangerous.
+        lengths = ends - starts
+        longest_idx = np.argmax(lengths)
+        
+        return starts[longest_idx], ends[longest_idx]
+
+    def _find_best_point(self, ranges: np.ndarray, start: int, end: int) -> float:
+        """
+        Find the target angle. 
+        Strategy: Aim for the furthest point in the selected gap, 
+        smoothed towards the center of the gap.
+        """
+        gap_points = ranges[start:end+1]
         
         if len(gap_points) == 0:
-            # Fallback to center of gap
-            center_idx = (gap_start + gap_end) // 2
-            return scan_array[center_idx, 0]
-        
-        # Find point closest to lookahead_distance
-        distances = gap_points[:, 1]
-        angles = gap_points[:, 0]
-        
-        # Prefer points near lookahead_distance, but also consider angle (prefer center)
-        best_idx = 0
-        best_score = float('inf')
-        
-        for i in range(len(gap_points)):
-            dist = distances[i]
-            angle = abs(angles[i])  # Absolute angle from center
-            
-            # Score: combination of distance error and angle preference
-            distance_error = abs(dist - self.lookahead_distance)
-            angle_penalty = angle / 90.0  # Prefer center (0°) over sides
-            
-            score = distance_error + angle_penalty
-            
-            if score < best_score:
-                best_score = score
-                best_idx = i
-        
-        return angles[best_idx]
-    
+            return 0.0
+
+        # Simple robust strategy: Aim for the center of the largest gap
+        # This keeps the robot equidistant from obstacles on left and right
+        return gap_points[len(gap_points)//2, 0]
+
     def _angle_to_steering(self, angle: float) -> float:
+        # Map -90..90 to -1..1
+        steer = angle / 90.0
+        return max(-1.0, min(1.0, steer))
+
+    def _compute_speed(self, closest_dist: float, steer_effort: float) -> float:
         """
-        Convert angle in degrees to steering command [-1, 1].
-        -90° (left) -> -1.0, 0° (center) -> 0.0, +90° (right) -> 1.0
+        Speed logic:
+        1. Slow down if obstacles are close.
+        2. Slow down if steering hard (turning).
         """
-        # Normalize angle to [-90, 90]
-        angle = max(-90, min(90, angle))
+        if closest_dist < self.safety_distance:
+            return 0.0
+            
+        # Distance factor: 0.0 at safety_dist, 1.0 at 1.0m+safety
+        dist_factor = np.clip((closest_dist - self.safety_distance), 0.0, 1.0)
         
-        # Convert to [-1, 1]
-        steering = angle / 90.0
-        return steering
-    
-    def _compute_speed(self, scan_array: np.ndarray, gap_start: int, gap_end: int, closest_distance: float) -> float:
-        """
-        Compute acceleration based on closest obstacle and gap size.
-        """
-        # Base speed on closest distance
-        if closest_distance < self.safety_distance:
-            return 0.0  # Too close, stop
+        # Turn factor: 1.0 at straight, 0.3 at full turn
+        turn_factor = 1.0 - (0.7 * steer_effort)
         
-        # Speed factor based on distance (closer = slower)
-        distance_factor = min(1.0, (closest_distance - self.safety_distance) / 2.0)
+        target_speed = self.max_speed * dist_factor * turn_factor
         
-        # Gap size factor (larger gap = faster)
-        gap_points = scan_array[gap_start:gap_end + 1]
-        gap_size = len(gap_points)
-        max_gap_size = len(scan_array)
-        gap_factor = gap_size / max_gap_size if max_gap_size > 0 else 0.0
-        
-        # Combine factors
-        speed_factor = (distance_factor + gap_factor) / 2.0
-        speed = self.min_speed + (self.max_speed - self.min_speed) * speed_factor
-        
-        return min(self.max_speed, max(self.min_speed, speed))
+        return max(self.min_speed, target_speed)
