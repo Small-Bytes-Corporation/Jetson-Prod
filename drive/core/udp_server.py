@@ -8,6 +8,12 @@ import threading
 import time
 from .config import UDP_PORT, UDP_HOST, UDP_HEARTBEAT_TIMEOUT
 
+try:
+    import netifaces
+    HAS_NETIFACES = True
+except ImportError:
+    HAS_NETIFACES = False
+
 
 def _payload_for_debug(data, max_str_len=200, max_list_len=10):
     """
@@ -80,24 +86,75 @@ class UDPServer:
         # Cleanup thread for removing stale clients
         self.cleanup_thread = None
 
+    def _get_broadcast_address(self):
+        """Get the broadcast address of the active network interface."""
+        if HAS_NETIFACES:
+            try:
+                # Try to get default gateway interface
+                gateways = netifaces.gateways()
+                default_interface = gateways.get('default', {}).get(netifaces.AF_INET, {}).get(1)
+                
+                if default_interface:
+                    addrs = netifaces.ifaddresses(default_interface)
+                    if netifaces.AF_INET in addrs:
+                        for addr_info in addrs[netifaces.AF_INET]:
+                            if 'broadcast' in addr_info:
+                                return addr_info['broadcast']
+                
+                # Fallback: try all interfaces
+                for interface in netifaces.interfaces():
+                    addrs = netifaces.ifaddresses(interface)
+                    if netifaces.AF_INET in addrs:
+                        for addr_info in addrs[netifaces.AF_INET]:
+                            if 'broadcast' in addr_info:
+                                return addr_info['broadcast']
+            except Exception:
+                pass
+        
+        # Final fallback: use configured host or default broadcast
+        return self.host if self.host != '255.255.255.255' else '255.255.255.255'
+
     def _setup_sockets(self):
         """Setup UDP sockets for sending and receiving."""
         try:
+            # Determine broadcast address
+            self.broadcast_addr = self._get_broadcast_address()
+            
             # Socket for sending (broadcast)
             self.send_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
             self.send_socket.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
+            # Bind to all interfaces for sending
+            self.send_socket.bind(('0.0.0.0', 0))
             
             # Socket for receiving heartbeats
             self.receive_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
             self.receive_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-            self.receive_socket.bind(('', self.port))
+            self.receive_socket.bind(('0.0.0.0', self.port))
             self.receive_socket.settimeout(1.0)  # 1 second timeout for checking running flag
+            
+            if not self.suppress_debug_prints:
+                print(f"[UDP] Using broadcast address: {self.broadcast_addr}")
             
             return True
         except Exception as e:
             if not self.suppress_debug_prints:
                 print(f"[UDP] Error setting up sockets: {e}")
-            return False
+            # Fallback: try without netifaces
+            try:
+                self.broadcast_addr = '255.255.255.255'
+                self.send_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+                self.send_socket.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
+                self.receive_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+                self.receive_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+                self.receive_socket.bind(('0.0.0.0', self.port))
+                self.receive_socket.settimeout(1.0)
+                if not self.suppress_debug_prints:
+                    print(f"[UDP] Fallback: Using {self.broadcast_addr} as broadcast address")
+                return True
+            except Exception as e2:
+                if not self.suppress_debug_prints:
+                    print(f"[UDP] Fallback also failed: {e2}")
+                return False
 
     def _receive_heartbeats(self):
         """Thread function to receive heartbeat messages from clients."""
@@ -212,8 +269,9 @@ class UDPServer:
             message_bytes = message_json.encode('utf-8')
 
             # Send via broadcast
-            # Use broadcast address from config (default: 255.255.255.255)
-            self.send_socket.sendto(message_bytes, (self.host, self.port))
+            # Use determined broadcast address
+            broadcast_addr = getattr(self, 'broadcast_addr', self.host)
+            self.send_socket.sendto(message_bytes, (broadcast_addr, self.port))
             
             return True
         except Exception as e:

@@ -474,6 +474,13 @@ class ManualDriveApp:
                             lidar_max_angle = max(angles)
                     
                     mode_str = "AUTONOMOUS" if self.autonomous_mode else "MANUAL"
+                    
+                    # Get pan/tilt values even if pan/tilt is disabled
+                    pan_speed = 0.0
+                    tilt_pos = 0.0
+                    if self.pantilt is not None and hasattr(self.pantilt, 'get_position'):
+                        pan_speed, tilt_pos = self.pantilt.get_position()
+                    
                     self.dashboard.update_data(
                         acceleration=acceleration,
                         steering=steering,
@@ -486,6 +493,8 @@ class ManualDriveApp:
                         lidar_points=lidar_points,
                         lidar_min_angle=lidar_min_angle,
                         lidar_max_angle=lidar_max_angle,
+                        pan_speed=pan_speed,
+                        tilt_position=tilt_pos,
                     )
 
                 now = time.monotonic()

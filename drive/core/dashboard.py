@@ -191,15 +191,21 @@ class Dashboard:
         table.add_column("Sensor", style="cyan", width=15)
         table.add_column("Value", width=20)
         
-        # PanTilt
-        pan_speed = "N/A"
-        tilt_pos = "N/A"
-        if self.app.pantilt and hasattr(self.app.pantilt, 'get_position'):
-            pan, tilt = self.app.pantilt.get_position()
-            pan_speed = f"{pan:.3f}"
-            tilt_pos = f"{tilt:.3f}"
-        table.add_row("Pan Speed", pan_speed)
-        table.add_row("Tilt Position", tilt_pos)
+        # PanTilt - get from dashboard data if available, otherwise from controller
+        with self._data_lock:
+            pan_speed = self.current_data.get('pan_speed')
+            tilt_pos = self.current_data.get('tilt_position')
+        
+        if pan_speed is None or tilt_pos is None:
+            # Fallback to controller if not in dashboard data
+            if self.app.pantilt and hasattr(self.app.pantilt, 'get_position'):
+                pan_speed, tilt_pos = self.app.pantilt.get_position()
+            else:
+                pan_speed = 0.0
+                tilt_pos = 0.0
+        
+        table.add_row("Pan Speed", f"{pan_speed:.3f}")
+        table.add_row("Tilt Position", f"{tilt_pos:.3f}")
         
         # Lidar
         with self._data_lock:
