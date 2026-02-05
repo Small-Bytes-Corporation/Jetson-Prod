@@ -333,7 +333,8 @@ class ManualDriveApp:
                     # Verify camera can actually produce frames before starting DataPublisher
                     camera_ready = self.camera.verify_ready()
                     if not camera_ready:
-                        log_error("[Camera] Warning: Camera initialization succeeded but cannot read frames. DataPublisher will start but may not receive camera data.")
+                        # Camera initialized but cannot read frames - this is a problem but not fatal
+                        log_error("[Camera] Warning: Camera initialized but cannot read frames. Check USB connection and camera pipeline.")
                         # Don't prevent DataPublisher from starting, but it may not get camera data
                         camera_ready = True  # Allow DataPublisher to start anyway
                 else:

@@ -92,13 +92,13 @@ class MotorController:
                 if result[0]:
                     self.motor, version = result[0]
                     if version:
-                        msg = f"[Motor] Firmware version: {version}"
-                        if self.error_callback:
-                            self.error_callback(msg)
-                        else:
-                            print(msg)
+                        # Version de firmware trouvée - information utile mais pas critique
+                        # On ne l'affiche pas dans les erreurs car ce n'est pas un problème
+                        pass
                     else:
-                        msg = "[Motor] Warning: Firmware version is None"
+                        # Version None - peut être normal pour certains VESC ou firmware ancien
+                        # Le moteur peut fonctionner sans cette information
+                        msg = "[Motor] Info: Firmware version unavailable (normal for some VESC configurations)"
                         if self.error_callback:
                             self.error_callback(msg)
                         else:
