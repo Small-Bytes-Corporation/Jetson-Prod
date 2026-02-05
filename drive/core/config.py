@@ -111,10 +111,15 @@ DEFAULT_LIDAR_PORT = _LIDAR_PORT
 
 LIDAR_BAUDRATE = 230400  # À vérifier selon documentation D500
 
-# Socket.io constants
-SOCKETIO_PORT = 3000
-SOCKETIO_HOST = '0.0.0.0'
-SOCKETIO_CORS_ORIGINS = '*'  # À restreindre en production
+# UDP network constants
+UDP_PORT = 3000
+UDP_HOST = '255.255.255.255'  # Broadcast address
+UDP_HEARTBEAT_TIMEOUT = 3.0  # Seconds before considering a client disconnected
+
+# Legacy SocketIO constants (deprecated, kept for compatibility during transition)
+SOCKETIO_PORT = UDP_PORT
+SOCKETIO_HOST = UDP_HOST
+SOCKETIO_CORS_ORIGINS = '*'  # Not used with UDP
 
 # Data publishing
 PUBLISH_RATE = 10  # Hz (fréquence d'envoi des données)

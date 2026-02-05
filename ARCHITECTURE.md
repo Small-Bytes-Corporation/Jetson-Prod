@@ -15,8 +15,8 @@ drive/
 │   ├── camera_controller.py    # Capture de frames caméra (sans IA)
 │   ├── lidar_controller.py     # Acquisition de données lidar
 │   ├── pantilt_controller.py   # Contrôle pan/tilt de la caméra
-│   ├── socket_server.py        # Serveur Socket.io
-│   ├── data_publisher.py       # Publication de données via Socket.io
+│   ├── udp_server.py           # Serveur UDP
+│   ├── data_publisher.py       # Publication de données via UDP
 │   └── config.py               # Constantes centralisées
 ├── applications/            # Applications métier
 │   └── manual_drive.py         # Conduite manuelle
@@ -43,8 +43,8 @@ Acquiert des données depuis un capteur lidar via communication série.
 ### PanTiltController
 Contrôle le système pan/tilt de la caméra via communication série avec un Arduino. Supporte le mouvement discret avec limites de sécurité.
 
-### SocketServer et DataPublisher
-Serveur Socket.io pour le streaming de données en temps réel (lidar, caméra) vers des clients web.
+### UDPServer et DataPublisher
+Serveur UDP pour le streaming de données en temps réel (lidar, caméra) vers des clients via UDP broadcast.
 
 ### ManualDriveApp
 Application de conduite manuelle qui orchestre tous les contrôleurs dans une boucle propre.
@@ -59,7 +59,7 @@ Chaque module peut être activé ou désactivé individuellement via des flags. 
 - `use_camera`: Capture de frames caméra (défaut: `False`)
 - `use_lidar`: Acquisition de données lidar (défaut: Auto-détecté)
 - `use_pan_tilt`: Contrôle pan/tilt de la caméra (défaut: `True`)
-- `enable_socket`: Serveur Socket.io pour streaming (défaut: `False`)
+- `enable_socket`: Serveur UDP pour streaming (défaut: `False`)
 
 Pour une documentation complète des modules, leurs flags, arguments CLI et exemples d'utilisation, voir [MODULES.md](MODULES.md).
 
@@ -95,4 +95,4 @@ Chaque application utilise une boucle principale propre qui :
 ## Documentation
 
 - [MODULES.md](MODULES.md): Documentation complète de tous les modules, flags et arguments CLI
-- [SOCKET_PROTOCOL.md](SOCKET_PROTOCOL.md): Protocole de communication Socket.io
+- [UDP_PROTOCOL.md](UDP_PROTOCOL.md): Protocole de communication UDP

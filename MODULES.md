@@ -16,7 +16,7 @@ Le système Robocar est composé de plusieurs modules modulaires qui peuvent êt
 | Camera | `use_camera` | `False` | Contrôleur | Capture de frames caméra DepthAI |
 | Lidar | `use_lidar` | Auto | Contrôleur | Acquisition de données lidar |
 | PanTilt | `use_pan_tilt` | `True` | Contrôleur | Contrôle pan/tilt de la caméra |
-| Socket | `enable_socket` | `False` | Service | Serveur Socket.io pour streaming |
+| Network | `enable_socket` | `False` | Service | Serveur UDP pour streaming |
 
 ## Description détaillée des modules
 
@@ -142,7 +142,7 @@ python3 main.py --camera --no-camera
 **Fichier**: `drive/core/lidar_controller.py`
 
 **Description**:
-Acquiert des données depuis un capteur lidar via communication série. Les données peuvent être publiées via Socket.io si activé.
+Acquiert des données depuis un capteur lidar via communication série. Les données peuvent être publiées via UDP si activé.
 
 **Flag**: `use_lidar` (défaut: Auto-détecté si `lidar_port` fourni)
 
@@ -153,7 +153,7 @@ Acquiert des données depuis un capteur lidar via communication série. Les donn
 **Port série**: Configuré via `--lidar-port` (défaut: détection automatique)
 
 **Dépendances**:
-- Généralement utilisé avec `SocketServer` et `DataPublisher` pour streaming
+- Généralement utilisé avec `UDPServer` et `DataPublisher` pour streaming
 
 **Exemple d'utilisation**:
 ```bash
@@ -213,19 +213,19 @@ python3 main.py --no-pan-tilt
 
 ---
 
-### SocketServer et DataPublisher
+### UDPServer et DataPublisher
 
 **Fichiers**: 
-- `drive/core/socket_server.py`
+- `drive/core/udp_server.py`
 - `drive/core/data_publisher.py`
 
 **Description**:
-Serveur Socket.io pour le streaming de données en temps réel (lidar, caméra) vers des clients web ou autres applications. Voir [docs/PROTOCOL.md](docs/PROTOCOL.md) pour le détail du protocole (événements et formats des payloads).
+Serveur UDP pour le streaming de données en temps réel (lidar, caméra) vers des clients via UDP broadcast. Voir [docs/PROTOCOL.md](docs/PROTOCOL.md) pour le détail du protocole (messages et formats des payloads).
 
 **Flag**: `enable_socket` (défaut: `False`)
 
 **Arguments CLI**:
-- `--enable-socket`: Active le serveur Socket.io
+- `--enable-socket`: Active le serveur UDP
 - `--socket-port INT`: Spécifie le port du serveur (défaut: 3000)
 
 **Port**: Configuré via `--socket-port` (défaut: 3000)
@@ -276,7 +276,7 @@ python3 main.py --enable-socket --no-lidar
 
 - `--lidar-port PATH`: Port série pour le lidar (défaut: auto-détection ou `config.DEFAULT_LIDAR_PORT`)
 - `--pan-tilt-port PATH`: Port série pour le pan/tilt (défaut: `config.PAN_TILT_SERIAL_PORT`, typiquement `/dev/ttyACM2`)
-- `--socket-port INT`: Port pour le serveur Socket.io (défaut: 3000)
+- `--socket-port INT`: Port pour le serveur UDP (défaut: 3000)
 
 ### Arguments Socket
 
@@ -360,8 +360,8 @@ LidarController (indépendant)
 
     └── DataPublisher (optionnel, si socket activé)
 
-SocketServer (indépendant)
-    └── DataPublisher (nécessite socket server)
+UDPServer (indépendant)
+    └── DataPublisher (nécessite UDP server)
 ```
 
 ---
@@ -388,11 +388,11 @@ Les constantes de configuration peuvent être modifiées dans `drive/core/config
 - `PAN_TILT_STEP_SIZE`: Taille du pas pour mouvement discret pan/tilt
 - `PAN_MIN/MAX`, `TILT_MIN/MAX`: Limites pan/tilt
 - `LOOP_SLEEP_TIME`: Fréquence de la boucle principale
-- `PUBLISH_RATE`: Fréquence de publication Socket.io (Hz)
-- `SOCKETIO_PORT`: Port par défaut du serveur Socket.io
+- `PUBLISH_RATE`: Fréquence de publication UDP (Hz)
+- `UDP_PORT`: Port par défaut du serveur UDP
 
 ---
 
-Pour le détail du protocole Socket.io (événements et payloads), voir [docs/PROTOCOL.md](docs/PROTOCOL.md).
+Pour le détail du protocole UDP (messages et payloads), voir [docs/PROTOCOL.md](docs/PROTOCOL.md) et [UDP_PROTOCOL.md](UDP_PROTOCOL.md).
 
 Pour plus d'informations sur l'architecture générale, voir [ARCHITECTURE.md](ARCHITECTURE.md).

@@ -9,7 +9,7 @@ import typing_patch  # noqa: F401
 import argparse
 import sys
 from drive.core.config import (
-    MAX_SPEED, DEFAULT_SERIAL_PORT, DEFAULT_LIDAR_PORT, SOCKETIO_PORT,
+    MAX_SPEED, DEFAULT_SERIAL_PORT, DEFAULT_LIDAR_PORT, UDP_PORT,
     PAN_TILT_SERIAL_PORT,
 )
 
@@ -18,7 +18,7 @@ Examples:
   # Run manual drive (default: motor, joystick, throttle, pan/tilt)
   python3 main.py
 
-  # Enable socket stream with camera (and optional lidar)
+  # Enable UDP network stream with camera (and optional lidar)
   python3 main.py --enable-socket --camera
   python3 main.py --enable-socket --camera --lidar-port /dev/ttyUSB0
 
@@ -62,7 +62,7 @@ def main():
     enable.add_argument(
         "--enable-socket",
         action="store_true",
-        help="Enable socket.io server for data streaming",
+        help="Enable UDP server for data streaming",
     )
 
     disable = parser.add_argument_group("Modules (disable)")
@@ -113,15 +113,15 @@ def main():
     ports.add_argument(
         "--socket-port",
         type=int,
-        default=SOCKETIO_PORT,
-        help=f"Socket.io server port (default: {SOCKETIO_PORT})",
+        default=UDP_PORT,
+        help=f"UDP server port (default: {UDP_PORT})",
     )
 
-    socket_grp = parser.add_argument_group("Socket")
+    socket_grp = parser.add_argument_group("Network (UDP)")
     socket_grp.add_argument(
         "--socket-debug",
         action="store_true",
-        help="Print full socket payloads (sensor_data, status) to console",
+        help="Print full UDP payloads (sensor_data, status) to console",
     )
 
     tools = parser.add_argument_group("Tools")

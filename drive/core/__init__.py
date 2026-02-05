@@ -9,7 +9,7 @@ from .camera_controller import CameraController
 from .lidar_controller import LidarController
 from .lidar_navigation import LidarNavigator
 from .pantilt_controller import PanTiltController
-from .socket_server import SocketServer
+from .udp_server import UDPServer
 from .data_publisher import DataPublisher
 
 __all__ = [
@@ -20,6 +20,6 @@ __all__ = [
     "LidarController",
     "LidarNavigator",
     "PanTiltController",
-    "SocketServer",
+    "UDPServer",
     "DataPublisher",
 ]

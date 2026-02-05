@@ -11,13 +11,13 @@ import time
 import pygame
 from drive.core import (
     MotorController, JoystickController, ThrottleController, CameraController,
-    LidarController, LidarNavigator, PanTiltController, SocketServer, DataPublisher
+    LidarController, LidarNavigator, PanTiltController, UDPServer, DataPublisher
 )
 from drive.core.dashboard import Dashboard
 from drive.core.joystick_controller import Input, Axis
 from drive.core.config import (
     LOOP_SLEEP_TIME, DEFAULT_SERIAL_PORT, MAX_SPEED,
-    DEFAULT_LIDAR_PORT, SOCKETIO_PORT, PAN_TILT_SERIAL_PORT,
+    DEFAULT_LIDAR_PORT, UDP_PORT, PAN_TILT_SERIAL_PORT,
     CAMERA_STARTUP_DELAY,
 )
 
@@ -28,7 +28,7 @@ class ManualDriveApp:
     """
     
     def __init__(self, max_speed=MAX_SPEED, serial_port=DEFAULT_SERIAL_PORT, 
-                 use_camera=False, enable_socket=False, lidar_port=None, socket_port=SOCKETIO_PORT,
+                 use_camera=False, enable_socket=False, lidar_port=None, socket_port=UDP_PORT,
                  socket_debug=False,
                  use_motor=True, pan_tilt_port=None, use_pan_tilt=True,
                  use_joystick=True, use_throttle=True, use_lidar=None,
@@ -41,9 +41,9 @@ class ManualDriveApp:
             max_speed: Maximum speed for forward/backward movement.
             serial_port: Serial port for VESC motor.
             use_camera: Whether to use camera (optional, for display/recording).
-            enable_socket: Whether to enable socket.io server for data streaming.
+            enable_socket: Whether to enable UDP server for data streaming.
             lidar_port: Serial port for lidar (e.g., '/dev/ttyUSB0'). If None, lidar is disabled.
-            socket_port: Port for socket.io server.
+            socket_port: Port for UDP server.
             socket_debug: If True, print full socket payloads (sensor_data, status) to console.
             use_motor: Whether to enable motor/VESC. If False, motor is disabled (mock mode).
             pan_tilt_port: Serial port for pan/tilt controller. If None, uses default from config.
@@ -100,13 +100,13 @@ class ManualDriveApp:
         self.camera = CameraController(debug=debug_camera) if use_camera else None
         self.lidar = LidarController(serial_port=lidar_port, debug=debug_lidar) if self.use_lidar and lidar_port else None
         
-        # Socket.io components
+        # UDP network components
         self.socket_server = None
         self.data_publisher = None
         
         if enable_socket:
             # Suppress debug prints if dashboard is enabled (info displayed in dashboard instead)
-            self.socket_server = SocketServer(port=socket_port, debug_payload=socket_debug, suppress_debug_prints=dashboard)
+            self.socket_server = UDPServer(port=socket_port, debug_payload=socket_debug, suppress_debug_prints=dashboard)
             self.data_publisher = DataPublisher(
                 lidar_controller=self.lidar,
                 camera_controller=self.camera,
@@ -307,7 +307,7 @@ class ManualDriveApp:
                                     print("[ManualDrive] Camera not available, DataPublisher will run without camera data")
                         self.data_publisher.start()
                     if not self.dashboard_enabled:
-                        print(f"[ManualDrive] Socket.io server running on port {self.socket_server.port}")
+                        print(f"[ManualDrive] UDP server running on port {self.socket_server.port}")
                 except Exception as e:
                     if not self.dashboard_enabled:
                         print(f"[ManualDrive] Warning: Failed to start socket server: {e}")
