@@ -142,6 +142,8 @@ class ManualDriveApp:
             
             if self.motor is not None:
                 self.motor.error_callback = error_callback
+            if self.pantilt is not None:
+                self.pantilt.error_callback = error_callback
     
     def _print_init_status(self):
         """Print init status for each module (only when dashboard is disabled)."""

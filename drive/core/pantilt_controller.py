@@ -21,7 +21,7 @@ class PanTiltController:
     def __init__(self, serial_port=PAN_TILT_SERIAL_PORT, enabled=True,
                  pan_min=PAN_MIN, pan_max=PAN_MAX,
                  tilt_min=TILT_MIN, tilt_max=TILT_MAX,
-                 step_size=PAN_TILT_STEP_SIZE, debug=False):
+                 step_size=PAN_TILT_STEP_SIZE, debug=False, error_callback=None):
         
         self.serial_port = serial_port
         self.enabled = enabled
@@ -31,8 +31,14 @@ class PanTiltController:
         self.tilt_min = tilt_min
         self.tilt_max = tilt_max
         self.step_size = step_size
+        self.error_callback = error_callback
         
         self.serial_conn = None
+        
+        # Throttling pour éviter de spammer les erreurs
+        self._last_error_time = 0.0
+        self._error_throttle_interval = 5.0  # Afficher une erreur max toutes les 5 secondes
+        self._last_error_message = None
         
         # --- ETAT INTERNE ---
         self.current_pan_speed = 0.0   # Vitesse envoyée à l'Arduino
@@ -99,8 +105,21 @@ class PanTiltController:
             if self.serial_conn.in_waiting:
                 self.serial_conn.read(self.serial_conn.in_waiting)
         except Exception as e:
-            if self.debug:
-                print(f"[PanTilt] Error sending command: {e}")
+            # Throttle les erreurs pour éviter de spammer
+            import time
+            current_time = time.time()
+            error_msg = f"[PanTilt] Error sending command: {e}"
+            
+            # Afficher seulement si c'est une nouvelle erreur ou si assez de temps s'est écoulé
+            if (error_msg != self._last_error_message or 
+                current_time - self._last_error_time >= self._error_throttle_interval):
+                self._last_error_time = current_time
+                self._last_error_message = error_msg
+                
+                if self.error_callback:
+                    self.error_callback(error_msg)
+                elif self.debug:
+                    print(error_msg)
     
     def update(self, pan_delta, tilt_delta):
         """
