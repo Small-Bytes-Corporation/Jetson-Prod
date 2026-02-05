@@ -17,7 +17,7 @@ from .config import (
 # Constants for preprocessing
 MAX_LIDAR_DIST = 3.0  # Cap distances to 3m to view open space uniformly
 ROBOT_BUBBLE_RADIUS = 0.35  # meters (Robot radius + Safety margin)
-LIDAR_ROTATION_OFFSET = -90.0  # degrees: lidar is rotated 90° to the right, so subtract 90° to correct
+LIDAR_ROTATION_OFFSET = 90.0  # degrees: lidar is rotated 90° to the right, so add 90° to correct
 
 class LidarNavigator:
     """
