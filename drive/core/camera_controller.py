@@ -3,6 +3,8 @@ Camera controller for DepthAI camera capture (no AI processing).
 Supports DepthAI 2.x (ColorCamera + XLinkOut + Device) and 3.3+ (Camera node + pipeline.start).
 """
 
+import threading
+import time
 import depthai as dai
 from .config import CAM_WIDTH, CAM_HEIGHT, CAM_FPS
 
@@ -40,6 +42,7 @@ class CameraController:
         self.q_rgb = None
         self._initialized = False
         self._use_v3 = _is_depthai_v3(dai)
+        self._frame_lock = threading.Lock()  # Lock for thread-safe frame access
     
     def initialize(self):
         """
@@ -101,37 +104,41 @@ class CameraController:
     def get_frame(self):
         """
         Get the latest frame from the camera.
+        Thread-safe: uses a lock to prevent concurrent access to the DepthAI queue.
         
         Returns:
             numpy.ndarray or None: OpenCV frame (BGR format) or None if no frame available.
         """
         if not self._initialized or self.q_rgb is None:
             return None
-        try:
-            # Try to get frame from queue (non-blocking if tryGet available)
-            if hasattr(self.q_rgb, "tryGet"):
-                frame_in = self.q_rgb.tryGet()
-            else:
-                # Fallback to blocking get() - may raise exceptions on Jetson
-                frame_in = self.q_rgb.get()
-            
-            if frame_in is None:
-                return None
-            
-            # Convert to OpenCV frame - may raise exceptions on communication errors
-            return frame_in.getCvFrame()
-        except (RuntimeError, Exception) as e:
-            # Handle X_LINK_ERROR and other DepthAI communication errors
-            # On Jetson, USB communication issues can cause exceptions
-            # Return None to allow the system to continue functioning
-            if self.debug:
-                error_msg = str(e)
-                # Check if it's an X_LINK_ERROR specifically
-                if "X_LINK_ERROR" in error_msg or "rgb" in error_msg.lower():
-                    print(f"[Camera] Communication error reading frame: {e}")
+        
+        # Use lock to ensure thread-safe access to DepthAI queue
+        with self._frame_lock:
+            try:
+                # Try to get frame from queue (non-blocking if tryGet available)
+                if hasattr(self.q_rgb, "tryGet"):
+                    frame_in = self.q_rgb.tryGet()
                 else:
-                    print(f"[Camera] Error reading frame: {e}")
-            return None
+                    # Fallback to blocking get() - may raise exceptions on Jetson
+                    frame_in = self.q_rgb.get()
+                
+                if frame_in is None:
+                    return None
+                
+                # Convert to OpenCV frame - may raise exceptions on communication errors
+                return frame_in.getCvFrame()
+            except (RuntimeError, Exception) as e:
+                # Handle X_LINK_ERROR and other DepthAI communication errors
+                # On Jetson, USB communication issues can cause exceptions
+                # Return None to allow the system to continue functioning
+                if self.debug:
+                    error_msg = str(e)
+                    # Check if it's an X_LINK_ERROR specifically
+                    if "X_LINK_ERROR" in error_msg or "rgb" in error_msg.lower():
+                        print(f"[Camera] Communication error reading frame: {e}")
+                    else:
+                        print(f"[Camera] Error reading frame: {e}")
+                return None
     
     def is_available(self):
         """
@@ -141,6 +148,38 @@ class CameraController:
             bool: True if camera is ready, False otherwise.
         """
         return self._initialized and (self.device is not None or self._pipeline is not None)
+    
+    def verify_ready(self, timeout=2.0, max_attempts=10):
+        """
+        Verify that the camera can actually produce frames.
+        This helps ensure the camera pipeline is stable before starting DataPublisher.
+        
+        Args:
+            timeout: Maximum time to wait for a frame (seconds).
+            max_attempts: Maximum number of frame read attempts.
+        
+        Returns:
+            bool: True if camera can produce frames, False otherwise.
+        """
+        if not self.is_available():
+            return False
+        
+        # Try to read at least one frame to verify the pipeline is working
+        start_time = time.time()
+        attempts = 0
+        
+        while attempts < max_attempts and (time.time() - start_time) < timeout:
+            frame = self.get_frame()
+            if frame is not None:
+                if self.debug:
+                    print(f"[Camera] Verified ready: successfully read frame after {attempts + 1} attempt(s)")
+                return True
+            attempts += 1
+            time.sleep(0.1)  # Small delay between attempts
+        
+        if self.debug:
+            print(f"[Camera] Warning: Could not verify camera readiness after {attempts} attempts")
+        return False
     
     def stop(self):
         """Stop the camera and clean up resources."""

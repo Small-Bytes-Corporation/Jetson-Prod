@@ -25,6 +25,7 @@ AUTONOMOUS_GAP_THRESHOLD = 0.3  # Minimum gap size to consider (meters)
 CAM_WIDTH = 320
 CAM_HEIGHT = 180
 CAM_FPS = 30
+CAMERA_STARTUP_DELAY = 0.5  # Delay in seconds after camera initialization before starting DataPublisher (helps on Jetson)
 
 # Platform detection
 IS_MAC = platform.system() == 'Darwin'

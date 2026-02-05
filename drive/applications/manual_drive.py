@@ -18,6 +18,7 @@ from drive.core.joystick_controller import Input, Axis
 from drive.core.config import (
     LOOP_SLEEP_TIME, DEFAULT_SERIAL_PORT, MAX_SPEED,
     DEFAULT_LIDAR_PORT, SOCKETIO_PORT, PAN_TILT_SERIAL_PORT,
+    CAMERA_STARTUP_DELAY,
 )
 
 
@@ -265,11 +266,45 @@ class ManualDriveApp:
             if self.use_camera or self.use_lidar:
                 self._initialize_sensors()
             
+            # If camera is enabled and socket is enabled, verify camera is ready before starting DataPublisher
+            # This prevents the DataPublisher thread from accessing the camera before it's fully initialized
+            # which can cause crashes on Jetson due to resource contention
+            camera_ready = False
+            if self.enable_socket and self.use_camera and self.camera is not None:
+                if self.camera.is_available():
+                    # Add delay to allow camera pipeline to stabilize (especially important on Jetson)
+                    if not self.dashboard_enabled:
+                        print(f"[ManualDrive] Waiting {CAMERA_STARTUP_DELAY}s for camera to stabilize...")
+                    time.sleep(CAMERA_STARTUP_DELAY)
+                    
+                    # Verify camera can actually produce frames before starting DataPublisher
+                    if not self.dashboard_enabled:
+                        print("[ManualDrive] Verifying camera readiness...")
+                    camera_ready = self.camera.verify_ready()
+                    if camera_ready:
+                        if not self.dashboard_enabled:
+                            print("[ManualDrive] Camera verified ready, starting DataPublisher...")
+                    else:
+                        if not self.dashboard_enabled:
+                            print("[ManualDrive] Warning: Camera initialization succeeded but cannot read frames. DataPublisher will start but may not receive camera data.")
+                        # Don't prevent DataPublisher from starting, but it may not get camera data
+                        camera_ready = True  # Allow DataPublisher to start anyway
+                else:
+                    if not self.dashboard_enabled:
+                        print("[ManualDrive] Warning: Camera initialization failed. DataPublisher will start without camera.")
+            
             # Start socket server if enabled
             if self.enable_socket and self.socket_server is not None:
                 try:
                     self.socket_server.start()
+                    # Only start DataPublisher if camera is ready (or if camera is not enabled)
                     if self.data_publisher is not None:
+                        # If camera failed to initialize, remove it from DataPublisher
+                        if self.use_camera and (self.camera is None or not camera_ready):
+                            if self.camera is None:
+                                self.data_publisher.camera_controller = None
+                                if not self.dashboard_enabled:
+                                    print("[ManualDrive] Camera not available, DataPublisher will run without camera data")
                         self.data_publisher.start()
                     if not self.dashboard_enabled:
                         print(f"[ManualDrive] Socket.io server running on port {self.socket_server.port}")
