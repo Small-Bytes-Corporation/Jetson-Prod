@@ -104,7 +104,8 @@ class ManualDriveApp:
         self.data_publisher = None
         
         if enable_socket:
-            self.socket_server = SocketServer(port=socket_port, debug_payload=socket_debug)
+            # Suppress debug prints if dashboard is enabled (info displayed in dashboard instead)
+            self.socket_server = SocketServer(port=socket_port, debug_payload=socket_debug, suppress_debug_prints=dashboard)
             self.data_publisher = DataPublisher(
                 lidar_controller=self.lidar,
                 camera_controller=self.camera,
@@ -259,9 +260,13 @@ class ManualDriveApp:
             if not self.dashboard_enabled:
                 print("[ManualDrive] Initializing controllers...")
             
-            # Initialize sensors and start socket server if enabled
-            if self.enable_socket and self.socket_server is not None:
+            # Initialize sensors (camera and lidar) if enabled
+            # Initialize even if socket is not enabled (e.g., for dashboard display)
+            if self.use_camera or self.use_lidar:
                 self._initialize_sensors()
+            
+            # Start socket server if enabled
+            if self.enable_socket and self.socket_server is not None:
                 try:
                     self.socket_server.start()
                     if self.data_publisher is not None:

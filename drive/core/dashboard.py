@@ -217,6 +217,31 @@ class Dashboard:
             socket_clients = self.current_data.get('socket_clients', 0)
         table.add_row("Socket Clients", str(socket_clients))
         
+        # Socket emission info
+        if self.app.socket_server and self.app.socket_server.is_running():
+            emission_info = self.app.socket_server.get_last_emission_info()
+            last_sensor_time = emission_info.get('last_sensor_data_time')
+            last_status_time = emission_info.get('last_status_time')
+            sensor_size = emission_info.get('last_sensor_data_size')
+            
+            if last_sensor_time:
+                import time
+                age = time.time() - last_sensor_time
+                sensor_info = f"{age:.1f}s ago"
+                if sensor_size:
+                    sensor_info += f" ({sensor_size} bytes)"
+            else:
+                sensor_info = "Never"
+            table.add_row("Last Sensor Data", sensor_info)
+            
+            if last_status_time:
+                import time
+                age = time.time() - last_status_time
+                status_info = f"{age:.1f}s ago"
+            else:
+                status_info = "Never"
+            table.add_row("Last Status", status_info)
+        
         return table
     
     def _create_layout(self):
@@ -262,6 +287,7 @@ class Dashboard:
                     if self.app.socket_server:
                         with self._data_lock:
                             self.current_data['socket_clients'] = self.app.socket_server.get_client_count()
+                            # Les informations d'émission sont récupérées directement dans _create_sensors_table
                     
                     # Mettre à jour l'affichage
                     live.update(self._create_layout())

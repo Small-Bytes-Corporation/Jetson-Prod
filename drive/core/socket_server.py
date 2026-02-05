@@ -42,11 +42,12 @@ class SocketServer:
     Socket.io server for broadcasting camera data to clients.
     """
 
-    def __init__(self, port=SOCKETIO_PORT, host=SOCKETIO_HOST, cors_origins=SOCKETIO_CORS_ORIGINS, debug_payload=False):
+    def __init__(self, port=SOCKETIO_PORT, host=SOCKETIO_HOST, cors_origins=SOCKETIO_CORS_ORIGINS, debug_payload=False, suppress_debug_prints=False):
         self.port = port
         self.host = host
         self.cors_origins = cors_origins
         self.debug_payload = debug_payload
+        self.suppress_debug_prints = suppress_debug_prints
 
         self.app = Flask(__name__)
         self.app.config['SECRET_KEY'] = 'robocar-secret-key'
@@ -64,6 +65,11 @@ class SocketServer:
 
         # Track connected clients
         self.clients = set()
+        
+        # Track last emitted data for dashboard
+        self.last_sensor_data_time = None
+        self.last_status_time = None
+        self.last_sensor_data_size = None
 
         self._setup_handlers()
 
@@ -75,13 +81,14 @@ class SocketServer:
             sid = request.sid
             self.clients.add(sid)
 
-            print(f"[SocketIO] Client connected: {sid} ({len(self.clients)} clients)")
+            if not self.suppress_debug_prints:
+                print(f"[SocketIO] Client connected: {sid} ({len(self.clients)} clients)")
 
             status_payload = {
                 'message': 'Connected to robocar sensor stream',
                 'connected': True
             }
-            if self.debug_payload:
+            if self.debug_payload and not self.suppress_debug_prints:
                 print(f"[SocketIO] [debug] emit status: {json.dumps(status_payload, indent=2)}")
             emit('status', status_payload)
 
@@ -90,12 +97,13 @@ class SocketServer:
             sid = request.sid
             self.clients.discard(sid)
 
-            print(f"[SocketIO] Client disconnected: {sid} ({len(self.clients)} clients)")
+            if not self.suppress_debug_prints:
+                print(f"[SocketIO] Client disconnected: {sid} ({len(self.clients)} clients)")
 
         @self.socketio.on('ping')
         def handle_ping():
             pong_payload = {'timestamp': self.socketio.server.eio.get_time()}
-            if self.debug_payload:
+            if self.debug_payload and not self.suppress_debug_prints:
                 print(f"[SocketIO] [debug] emit pong: {json.dumps(pong_payload, indent=2)}")
             emit('pong', pong_payload)
 
@@ -109,7 +117,8 @@ class SocketServer:
 
         def run_server():
             try:
-                print(f"[SocketIO] Starting server on {self.host}:{self.port}")
+                if not self.suppress_debug_prints:
+                    print(f"[SocketIO] Starting server on {self.host}:{self.port}")
                 self.socketio.run(
                     self.app,
                     host=self.host,
@@ -146,22 +155,35 @@ class SocketServer:
         """Emit sensor data to all connected clients."""
         if self.running:
             try:
-                if self.debug_payload:
+                if self.debug_payload and not self.suppress_debug_prints:
                     summarized = _payload_for_debug(data)
                     print(f"[SocketIO] [debug] emit sensor_data (résumé console; les clients reçoivent les données complètes):\n{json.dumps(summarized, indent=2)}")
                 self.socketio.emit('sensor_data', data)
+                # Track for dashboard
+                import time
+                self.last_sensor_data_time = time.time()
+                # Estimate data size
+                try:
+                    self.last_sensor_data_size = len(json.dumps(data))
+                except:
+                    self.last_sensor_data_size = None
             except Exception as e:
-                print(f"[SocketIO] Error emitting sensor_data: {e}")
+                if not self.suppress_debug_prints:
+                    print(f"[SocketIO] Error emitting sensor_data: {e}")
 
     def emit_status(self, status):
         """Emit status information to all connected clients."""
         if self.running:
             try:
-                if self.debug_payload:
+                if self.debug_payload and not self.suppress_debug_prints:
                     print(f"[SocketIO] [debug] emit status:\n{json.dumps(status, indent=2)}")
                 self.socketio.emit('status', status)
+                # Track for dashboard
+                import time
+                self.last_status_time = time.time()
             except Exception as e:
-                print(f"[SocketIO] Error emitting status: {e}")
+                if not self.suppress_debug_prints:
+                    print(f"[SocketIO] Error emitting status: {e}")
 
     def get_client_count(self):
         """Return number of connected clients."""
@@ -169,3 +191,11 @@ class SocketServer:
 
     def is_running(self):
         return self.running
+    
+    def get_last_emission_info(self):
+        """Get information about last emissions for dashboard."""
+        return {
+            'last_sensor_data_time': self.last_sensor_data_time,
+            'last_status_time': self.last_status_time,
+            'last_sensor_data_size': self.last_sensor_data_size,
+        }

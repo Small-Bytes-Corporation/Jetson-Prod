@@ -187,12 +187,12 @@ def main():
     # Determine use_lidar: enabled if lidar_port provided and not explicitly disabled
     use_lidar = None if args.no_lidar else (lidar_port is not None)
     
-    # Camera: enable if --camera, or if --enable-socket and a DepthAI camera is present (same as list-devices)
+    # Camera: enable if --camera, or if --enable-socket and a DepthAI camera is present, or if --dashboard (to show status)
     cameras_found = []
-    if not args.no_camera and (args.camera or args.enable_socket):
+    if not args.no_camera and (args.camera or args.enable_socket or args.dashboard):
         from drive.core.device_discovery import get_depthai_devices
         cameras_found = get_depthai_devices()
-    use_camera = (args.camera or (args.enable_socket and len(cameras_found) > 0)) and not args.no_camera
+    use_camera = (args.camera or (args.enable_socket and len(cameras_found) > 0) or (args.dashboard and len(cameras_found) > 0)) and not args.no_camera
     print(f"[Main] Caméra: use_camera={use_camera}, DepthAI trouvées={len(cameras_found)} (--camera pour forcer, --no-camera pour désactiver)")
     if use_camera and cameras_found and not args.camera:
         print("[Main] Caméra DepthAI détectée, activation pour le stream socket.")
