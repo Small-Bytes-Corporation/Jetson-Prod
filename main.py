@@ -193,15 +193,9 @@ def main():
         from drive.core.device_discovery import get_depthai_devices
         cameras_found = get_depthai_devices()
     use_camera = (args.camera or (args.enable_socket and len(cameras_found) > 0) or (args.dashboard and len(cameras_found) > 0)) and not args.no_camera
-    print(f"[Main] Caméra: use_camera={use_camera}, DepthAI trouvées={len(cameras_found)} (--camera pour forcer, --no-camera pour désactiver)")
-    if use_camera and cameras_found and not args.camera:
-        print("[Main] Caméra DepthAI détectée, activation pour le stream socket.")
-    if use_camera:
-        print(f"[Main] Utilisation de la première caméra DepthAI disponible")
     
     # Create manual drive application
     try:
-        print("[Main] Starting manual drive mode...")
         
         # If dashboard is enabled, activate all debug flags automatically
         dashboard_enabled = args.dashboard
@@ -237,12 +231,14 @@ def main():
         app.run()
         
     except KeyboardInterrupt:
-        print("\n[Main] Interrupted by user.")
         sys.exit(0)
     except Exception as e:
-        print(f"[Main] Fatal error: {e}")
-        import traceback
-        traceback.print_exc()
+        # If dashboard is enabled, error will be shown there
+        # Otherwise, print to console
+        if not args.dashboard:
+            print(f"[Main] Fatal error: {e}")
+            import traceback
+            traceback.print_exc()
         sys.exit(1)
 
 

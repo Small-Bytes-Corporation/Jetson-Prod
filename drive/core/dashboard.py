@@ -4,7 +4,7 @@ Dashboard terminal pour afficher l'état des modules et les valeurs en temps ré
 
 import time
 import threading
-from typing import Optional
+from typing import Optional, List
 from rich.console import Console
 from rich.live import Live
 from rich.panel import Panel
@@ -32,6 +32,17 @@ class Dashboard:
         self.update_thread = None
         self.update_rate = 0.1  # 10 Hz
         
+        # État d'initialisation
+        self._initializing = False
+        self._init_progress = 0.0  # 0.0 à 1.0
+        self._init_step = ""
+        self._init_lock = threading.Lock()
+        
+        # Erreurs
+        self._errors: List[str] = []
+        self._max_errors = 10  # Nombre maximum d'erreurs à afficher
+        self._errors_lock = threading.Lock()
+        
         # Données en temps réel (mises à jour depuis la boucle principale)
         self.current_data = {
             'acceleration': 0.0,
@@ -58,6 +69,49 @@ class Dashboard:
         """
         with self._data_lock:
             self.current_data.update(kwargs)
+    
+    def set_initializing(self, initializing: bool):
+        """
+        Définit l'état d'initialisation.
+        
+        Args:
+            initializing: True si l'initialisation est en cours, False sinon.
+        """
+        with self._init_lock:
+            self._initializing = initializing
+            if not initializing:
+                self._init_progress = 1.0
+                self._init_step = ""
+    
+    def update_progress(self, step: str, progress: float):
+        """
+        Met à jour la barre de progression pendant l'initialisation.
+        
+        Args:
+            step: Description de l'étape en cours.
+            progress: Progression entre 0.0 et 1.0.
+        """
+        with self._init_lock:
+            self._init_step = step
+            self._init_progress = max(0.0, min(1.0, progress))
+    
+    def add_error(self, message: str):
+        """
+        Ajoute une erreur à la section d'erreurs.
+        
+        Args:
+            message: Message d'erreur à afficher.
+        """
+        with self._errors_lock:
+            self._errors.append(message)
+            # Garder seulement les N dernières erreurs
+            if len(self._errors) > self._max_errors:
+                self._errors.pop(0)
+    
+    def clear_errors(self):
+        """Efface toutes les erreurs."""
+        with self._errors_lock:
+            self._errors.clear()
     
     def _get_module_status(self, module_name, use_flag, controller, init_error_key=None):
         """
@@ -250,37 +304,102 @@ class Dashboard:
         
         return table
     
+    def _create_progress_panel(self):
+        """Crée le panneau de progression pendant l'initialisation."""
+        with self._init_lock:
+            progress = self._init_progress
+            step = self._init_step
+        
+        # Créer un rendu de la barre de progression
+        from rich import box
+        
+        progress_text = Text()
+        progress_text.append("Initialisation en cours...\n\n", style="bold")
+        progress_text.append(f"Étape: {step or 'Démarrage...'}\n\n", style="cyan")
+        
+        # Simuler la barre de progression
+        bar_width = 40
+        filled = int(progress * bar_width)
+        bar = "█" * filled + "░" * (bar_width - filled)
+        percentage = int(progress * 100)
+        if progress == 1.0:
+            progress_text.append(f"[{bar}] {percentage}%", style="green")
+        else:
+            progress_text.append(f"[{bar}] {percentage}%", style="yellow")
+        
+        return Panel(progress_text, title="Initialisation", border_style="blue", box=box.ROUNDED)
+    
+    def _create_errors_panel(self):
+        """Crée le panneau d'erreurs."""
+        with self._errors_lock:
+            errors = self._errors.copy()
+        
+        if not errors:
+            error_text = Text("Aucune erreur", style="dim")
+        else:
+            error_text = Text()
+            for i, error in enumerate(errors[-self._max_errors:], 1):
+                error_text.append(f"• {error}\n", style="red")
+        
+        return Panel(error_text, title="Erreurs", border_style="red", height=min(6, max(3, len(errors) + 2)))
+    
     def _create_layout(self):
         """Crée la mise en page du dashboard."""
         layout = Layout()
         
-        # Layout principal: 2 colonnes
-        layout.split_column(
-            Layout(name="header", size=3),
-            Layout(name="main")
-        )
+        # Vérifier si on est en mode initialisation
+        with self._init_lock:
+            is_initializing = self._initializing
         
-        # Header avec titre
-        header_text = Text("ROBOCAR DASHBOARD", style="bold white on blue", justify="center")
-        layout["header"].update(Panel(header_text, border_style="blue"))
-        
-        # Main layout: 2 colonnes
-        layout["main"].split_row(
-            Layout(name="left"),
-            Layout(name="right")
-        )
-        
-        # Colonne gauche: Modules et Controls
-        layout["left"].split_column(
-            Layout(Panel(self._create_modules_table(), title="Modules Status", border_style="magenta"), name="modules"),
-            Layout(Panel(self._create_controls_table(), title="Controls", border_style="blue"), name="controls")
-        )
-        
-        # Colonne droite: Joystick et Sensors
-        layout["right"].split_column(
-            Layout(Panel(self._create_joystick_table(), title="Joystick", border_style="green"), name="joystick"),
-            Layout(Panel(self._create_sensors_table(), title="Sensors", border_style="yellow"), name="sensors")
-        )
+        if is_initializing:
+            # Layout pendant l'initialisation
+            layout.split_column(
+                Layout(name="header", size=3),
+                Layout(name="progress", size=8),
+                Layout(name="errors", size=6)
+            )
+            
+            # Header avec titre
+            header_text = Text("ROBOCAR DASHBOARD", style="bold white on blue", justify="center")
+            layout["header"].update(Panel(header_text, border_style="blue"))
+            
+            # Panneau de progression
+            layout["progress"].update(self._create_progress_panel())
+            
+            # Panneau d'erreurs
+            layout["errors"].update(self._create_errors_panel())
+        else:
+            # Layout principal normal
+            layout.split_column(
+                Layout(name="header", size=3),
+                Layout(name="main"),
+                Layout(name="errors", size=6)
+            )
+            
+            # Header avec titre
+            header_text = Text("ROBOCAR DASHBOARD", style="bold white on blue", justify="center")
+            layout["header"].update(Panel(header_text, border_style="blue"))
+            
+            # Main layout: 2 colonnes
+            layout["main"].split_row(
+                Layout(name="left"),
+                Layout(name="right")
+            )
+            
+            # Colonne gauche: Modules et Controls
+            layout["left"].split_column(
+                Layout(Panel(self._create_modules_table(), title="Modules Status", border_style="magenta"), name="modules"),
+                Layout(Panel(self._create_controls_table(), title="Controls", border_style="blue"), name="controls")
+            )
+            
+            # Colonne droite: Joystick et Sensors
+            layout["right"].split_column(
+                Layout(Panel(self._create_joystick_table(), title="Joystick", border_style="green"), name="joystick"),
+                Layout(Panel(self._create_sensors_table(), title="Sensors", border_style="yellow"), name="sensors")
+            )
+            
+            # Panneau d'erreurs en bas
+            layout["errors"].update(self._create_errors_panel())
         
         return layout
     

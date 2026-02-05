@@ -13,18 +13,20 @@ class MotorController:
     Controller for VESC motor with retry initialization and safe shutdown.
     """
     
-    def __init__(self, serial_port=DEFAULT_SERIAL_PORT, enabled=True):
+    def __init__(self, serial_port=DEFAULT_SERIAL_PORT, enabled=True, error_callback=None):
         """
         Initialize the motor controller.
         
         Args:
             serial_port: Path to the VESC serial port.
             enabled: If False, motor is disabled (mock mode) for testing without VESC.
+            error_callback: Optional callback function(message: str) for error logging.
         """
         self.serial_port = serial_port
         self.enabled = enabled
         self.motor = None
         self._initialized = False
+        self.error_callback = error_callback
     
     def initialize(self, max_retries=5, timeout=3):
         """
@@ -41,7 +43,10 @@ class MotorController:
             RuntimeError: If initialization fails after all retries (only if enabled=True).
         """
         if not self.enabled:
-            print("[Motor] Motor disabled (mock mode)")
+            if self.error_callback:
+                self.error_callback("[Motor] Motor disabled (mock mode)")
+            else:
+                print("[Motor] Motor disabled (mock mode)")
             self._initialized = True
             return True
         
@@ -72,7 +77,11 @@ class MotorController:
                 thread.join(timeout=timeout)
                 
                 if thread.is_alive():
-                    print(f"[Motor] Init timeout (try {attempt+1}/{max_retries}): VESC connection took longer than {timeout}s")
+                    msg = f"[Motor] Init timeout (try {attempt+1}/{max_retries}): VESC connection took longer than {timeout}s"
+                    if self.error_callback:
+                        self.error_callback(msg)
+                    else:
+                        print(msg)
                     if attempt < max_retries - 1:
                         time.sleep(1)
                     continue
@@ -83,14 +92,26 @@ class MotorController:
                 if result[0]:
                     self.motor, version = result[0]
                     if version:
-                        print(f"[Motor] Firmware version: {version}")
+                        msg = f"[Motor] Firmware version: {version}"
+                        if self.error_callback:
+                            self.error_callback(msg)
+                        else:
+                            print(msg)
                     else:
-                        print("[Motor] Warning: Firmware version is None")
+                        msg = "[Motor] Warning: Firmware version is None"
+                        if self.error_callback:
+                            self.error_callback(msg)
+                        else:
+                            print(msg)
                     self._initialized = True
                     return True
                     
             except Exception as e:
-                print(f"[Motor] Init failed (try {attempt+1}/{max_retries}): {e}")
+                msg = f"[Motor] Init failed (try {attempt+1}/{max_retries}): {e}"
+                if self.error_callback:
+                    self.error_callback(msg)
+                else:
+                    print(msg)
                 if attempt < max_retries - 1:
                     time.sleep(1)
         
@@ -127,7 +148,11 @@ class MotorController:
                 self.motor.set_rpm(0)
                 self.motor.stop_heartbeat()
             except Exception as e:
-                print(f"[Motor] Error during stop: {e}")
+                msg = f"[Motor] Error during stop: {e}"
+                if self.error_callback:
+                    self.error_callback(msg)
+                else:
+                    print(msg)
             finally:
                 self._initialized = False
     
