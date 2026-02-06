@@ -153,8 +153,8 @@ class DataPublisher:
         if self.camera_controller is not None:
             status["camera_connected"] = self.camera_controller.is_available()
         
-        # Get client count
+        # Client count not tracked anymore (UDP broadcast only)
         if self.socket_server is not None:
-            status["clients_connected"] = self.socket_server.get_client_count()
+            status["clients_connected"] = 0
         
         return status

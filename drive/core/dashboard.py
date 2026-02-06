@@ -416,7 +416,8 @@ class Dashboard:
                     # Mettre à jour les données du socket
                     if self.app.socket_server:
                         with self._data_lock:
-                            self.current_data['socket_clients'] = self.app.socket_server.get_client_count()
+                            # Le serveur UDP n'enregistre plus les clients connectés
+                            self.current_data['socket_clients'] = 0
                             # Les informations d'émission sont récupérées directement dans _create_sensors_table
                     
                     # Mettre à jour l'affichage
