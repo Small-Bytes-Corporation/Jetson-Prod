@@ -129,8 +129,7 @@ class ManualDriveApp:
 
         # Initialize lidar navigator if lidar is available
         if self.use_lidar and (self.lidar is not None or lidar_port is not None):
-            from drive.core.config import AUTONOMOUS_MAX_SPEED
-            self.lidar_navigator = LidarNavigator(max_speed=AUTONOMOUS_MAX_SPEED)
+            self.lidar_navigator = LidarNavigator(max_speed=self.max_speed)
         
         # Initialize dashboard if enabled
         self.dashboard = Dashboard(self) if self.dashboard_enabled else None
