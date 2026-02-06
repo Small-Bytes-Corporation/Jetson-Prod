@@ -18,7 +18,7 @@ AUTONOMOUS_MAX_SPEED = 0.05  # Maximum speed for autonomous mode (same as MAX_SP
 AUTONOMOUS_MIN_SPEED = 0.01  # Minimum speed for autonomous mode
 AUTONOMOUS_SAFETY_DISTANCE = 0.5  # Safety bubble radius (meters)
 AUTONOMOUS_FIELD_OF_VIEW = (-90.0, 90.0)  # Field of view in degrees (left, right)
-AUTONOMOUS_LOOKAHEAD_DISTANCE = 30.0  # Preferred forward distance (meters)
+AUTONOMOUS_LOOKAHEAD_DISTANCE = 300.0  # Preferred forward distance (meters)
 AUTONOMOUS_GAP_THRESHOLD = 0.3  # Minimum gap size to consider (meters)
 
 # Camera constants
