@@ -23,7 +23,7 @@ LIDAR_ROTATION_OFFSET = 90.0
 DEFAULT_BUBBLE_RADIUS = 1.0
 DEFAULT_CRITICAL_BUFFER = 0.15 
 # Augmenté à -0.22 pour vaincre le "cogging" (hésitation moteur)
-DEFAULT_REVERSE_SPEED = -0.05 
+DEFAULT_REVERSE_SPEED = -0.00 
 # Augmenté à 2.0s pour être SÛR que les roues sont arrêtées
 DEFAULT_STOP_TIME = 2.0       
 
