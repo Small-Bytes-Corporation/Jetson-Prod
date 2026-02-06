@@ -361,10 +361,6 @@ class ManualDriveApp:
                 # Process pygame events (needed for joystick input when enabled)
                 pygame.event.pump()
 
-                # Update Tuner Input/Drawing
-                if self.tuner is not None:
-                    self.tuner.update()
-
                 if self.use_joystick and self.joystick is not None:
                     self.joystick.update()
 
