@@ -9,7 +9,7 @@ import typing_patch  # noqa: F401
 import argparse
 import sys
 from drive.core.config import (
-    MAX_SPEED, DEFAULT_SERIAL_PORT, DEFAULT_LIDAR_PORT, UDP_PORT,
+    MAX_SPEED, DEFAULT_SERIAL_PORT, DEFAULT_LIDAR_PORT, SOCKETIO_PORT,
     PAN_TILT_SERIAL_PORT,
 )
 
@@ -18,9 +18,12 @@ Examples:
   # Run manual drive (default: motor, joystick, throttle, pan/tilt)
   python3 main.py
 
-  # Enable UDP network stream with camera (and optional lidar)
+  # Enable socket stream with camera (and optional lidar)
   python3 main.py --enable-socket --camera
   python3 main.py --enable-socket --camera --lidar-port /dev/ttyUSB0
+
+  # Run with Runtime Parameter Tuner (Ncurses)
+  python3 main.py --lidar-port /dev/ttyUSB0 --tuner
 
   # List devices (identify Lidar, VESC, DepthAI cameras)
   python3 main.py --list-devices
@@ -62,7 +65,7 @@ def main():
     enable.add_argument(
         "--enable-socket",
         action="store_true",
-        help="Enable UDP server for data streaming",
+        help="Enable socket.io server for data streaming",
     )
 
     disable = parser.add_argument_group("Modules (disable)")
@@ -113,15 +116,15 @@ def main():
     ports.add_argument(
         "--socket-port",
         type=int,
-        default=UDP_PORT,
-        help=f"UDP server port (default: {UDP_PORT})",
+        default=SOCKETIO_PORT,
+        help=f"Socket.io server port (default: {SOCKETIO_PORT})",
     )
 
-    socket_grp = parser.add_argument_group("Network (UDP)")
+    socket_grp = parser.add_argument_group("Socket")
     socket_grp.add_argument(
         "--socket-debug",
         action="store_true",
-        help="Print full UDP payloads (sensor_data, status) to console",
+        help="Print full socket payloads (sensor_data, status) to console",
     )
 
     tools = parser.add_argument_group("Tools")
@@ -140,7 +143,12 @@ def main():
     debug_grp.add_argument(
         "--dashboard",
         action="store_true",
-        help="Enable terminal dashboard showing all module status and debug info (steering, throttle, joystick, camera, pantilt, motor, lidar, socket)",
+        help="Enable terminal dashboard showing all module status and debug info",
+    )
+    debug_grp.add_argument(
+        "--tuner",
+        action="store_true",
+        help="Enable Runtime Parameter Tuner (Ncurses). Modifies Lidar navigation params on the fly. Disables Dashboard.",
     )
     debug_grp.add_argument(
         "--debug-pan-tilt",
@@ -193,12 +201,25 @@ def main():
         from drive.core.device_discovery import get_depthai_devices
         cameras_found = get_depthai_devices()
     use_camera = (args.camera or (args.enable_socket and len(cameras_found) > 0) or (args.dashboard and len(cameras_found) > 0)) and not args.no_camera
+    print(f"[Main] Caméra: use_camera={use_camera}, DepthAI trouvées={len(cameras_found)} (--camera pour forcer, --no-camera pour désactiver)")
+    if use_camera and cameras_found and not args.camera:
+        print("[Main] Caméra DepthAI détectée, activation pour le stream socket.")
+    if use_camera:
+        print(f"[Main] Utilisation de la première caméra DepthAI disponible")
     
     # Create manual drive application
     try:
+        print("[Main] Starting manual drive mode...")
         
-        # If dashboard is enabled, activate all debug flags automatically
+        # Conflict resolution: Tuner vs Dashboard
         dashboard_enabled = args.dashboard
+        if args.tuner:
+            if dashboard_enabled:
+                print("[Main] Warning: --tuner overrides --dashboard (they cannot run together).")
+            dashboard_enabled = False
+
+        # If dashboard is enabled, activate all debug flags automatically
+        # If tuner is enabled, we keep debug flags as requested but they might be suppressed by ncurses
         if dashboard_enabled:
             args.debug_pan_tilt = True
             args.debug_joystick = True
@@ -225,20 +246,19 @@ def main():
             debug_lidar=args.debug_lidar,
             debug_camera=args.debug_camera,
             dashboard=dashboard_enabled,
+            tuner=args.tuner  # Pass the tuner flag
         )
         
         # Run the application
         app.run()
         
     except KeyboardInterrupt:
+        print("\n[Main] Interrupted by user.")
         sys.exit(0)
     except Exception as e:
-        # If dashboard is enabled, error will be shown there
-        # Otherwise, print to console
-        if not args.dashboard:
-            print(f"[Main] Fatal error: {e}")
-            import traceback
-            traceback.print_exc()
+        print(f"[Main] Fatal error: {e}")
+        import traceback
+        traceback.print_exc()
         sys.exit(1)
 
 

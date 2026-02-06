@@ -11,14 +11,19 @@ import time
 import pygame
 from drive.core import (
     MotorController, JoystickController, ThrottleController, CameraController,
-    LidarController, LidarNavigator, PanTiltController, UDPServer, DataPublisher
+    LidarController, LidarNavigator, PanTiltController, SocketServer, DataPublisher
 )
 from drive.core.dashboard import Dashboard
+# Import optionnel du Tuner (supposant que drive/core/tuner.py existe)
+try:
+    from drive.core.tuner import ParamTuner
+except ImportError:
+    ParamTuner = None
+
 from drive.core.joystick_controller import Input, Axis
 from drive.core.config import (
     LOOP_SLEEP_TIME, DEFAULT_SERIAL_PORT, MAX_SPEED,
-    DEFAULT_LIDAR_PORT, UDP_PORT, PAN_TILT_SERIAL_PORT,
-    CAMERA_STARTUP_DELAY,
+    DEFAULT_LIDAR_PORT, SOCKETIO_PORT, PAN_TILT_SERIAL_PORT,
 )
 
 
@@ -28,42 +33,27 @@ class ManualDriveApp:
     """
     
     def __init__(self, max_speed=MAX_SPEED, serial_port=DEFAULT_SERIAL_PORT, 
-                 use_camera=False, enable_socket=False, lidar_port=None, socket_port=UDP_PORT,
+                 use_camera=False, enable_socket=False, lidar_port=None, socket_port=SOCKETIO_PORT,
                  socket_debug=False,
                  use_motor=True, pan_tilt_port=None, use_pan_tilt=True,
                  use_joystick=True, use_throttle=True, use_lidar=None,
                  debug_pan_tilt=False, debug_joystick=False, debug_lidar=False, debug_camera=False,
-                 dashboard=False):
+                 dashboard=False, tuner=False):
         """
         Initialize the manual drive application.
-        
-        Args:
-            max_speed: Maximum speed for forward/backward movement.
-            serial_port: Serial port for VESC motor.
-            use_camera: Whether to use camera (optional, for display/recording).
-            enable_socket: Whether to enable UDP server for data streaming.
-            lidar_port: Serial port for lidar (e.g., '/dev/ttyUSB0'). If None, lidar is disabled.
-            socket_port: Port for UDP server.
-            socket_debug: If True, print full socket payloads (sensor_data, status) to console.
-            use_motor: Whether to enable motor/VESC. If False, motor is disabled (mock mode).
-            pan_tilt_port: Serial port for pan/tilt controller. If None, uses default from config.
-            use_pan_tilt: Whether to enable pan/tilt control. If False, pan/tilt is disabled.
-            use_joystick: Whether to enable joystick controller. If False, joystick is disabled.
-            use_throttle: Whether to enable throttle controller. If False, throttle is disabled.
-            use_lidar: Whether to enable lidar. If None, auto-enabled if lidar_port is provided.
-            debug_pan_tilt: If True, print pan/tilt debug messages.
-            debug_joystick: If True, print joystick input and status (Duty/Steer).
-            debug_lidar: If True, print lidar debug messages.
-            debug_camera: If True, print camera debug messages.
-            dashboard: If True, enable terminal dashboard with all debug info.
         """
-        # Si dashboard est activé, désactiver tous les prints (affichés dans le dashboard)
+        # Gestion du conflit Tuner vs Dashboard
+        if tuner:
+            dashboard = False
+        
+        # Si dashboard est activé, activer automatiquement tous les flags de debug
+        # mais désactiver les prints verbeux du lidar (affichés dans le dashboard)
         if dashboard:
-            debug_pan_tilt = False  # Désactivé pour éviter les prints (affiché dans dashboard)
-            debug_joystick = False  # Désactivé pour éviter les prints (affiché dans dashboard)
+            debug_pan_tilt = True
+            debug_joystick = True
             debug_lidar = False  # Désactivé pour éviter les prints verbeux (affiché dans dashboard)
-            debug_camera = False  # Désactivé pour éviter les prints (affiché dans dashboard)
-            socket_debug = True  # Gardé pour les données socket (mais les prints sont supprimés dans UDPServer)
+            debug_camera = True
+            socket_debug = True
         
         self.max_speed = max_speed
         self.debug_pan_tilt = debug_pan_tilt
@@ -71,6 +61,7 @@ class ManualDriveApp:
         self.debug_lidar = debug_lidar
         self.debug_camera = debug_camera
         self.dashboard_enabled = dashboard
+        self.tuner_enabled = tuner
         self.serial_port = serial_port
         
         # Module flags (stored as attributes for documentation and introspection)
@@ -86,7 +77,6 @@ class ManualDriveApp:
         self.lidar_port = lidar_port
         
         # Initialize controllers based on flags
-        # Note: error_callback will be set after dashboard creation
         self.motor = MotorController(serial_port=serial_port, enabled=use_motor) if use_motor else None
         self.joystick = JoystickController(debug=debug_joystick) if use_joystick else None
         self.throttle = ThrottleController(max_speed=max_speed) if use_throttle else None
@@ -100,13 +90,14 @@ class ManualDriveApp:
         self.camera = CameraController(debug=debug_camera) if use_camera else None
         self.lidar = LidarController(serial_port=lidar_port, debug=debug_lidar) if self.use_lidar and lidar_port else None
         
-        # UDP network components
+        # Socket.io components
         self.socket_server = None
         self.data_publisher = None
         
         if enable_socket:
-            # Suppress debug prints if dashboard is enabled (info displayed in dashboard instead)
-            self.socket_server = UDPServer(port=socket_port, debug_payload=socket_debug, suppress_debug_prints=dashboard)
+            # Suppress debug prints if dashboard OR tuner is enabled
+            suppress_prints = dashboard or tuner
+            self.socket_server = SocketServer(port=socket_port, debug_payload=socket_debug, suppress_debug_prints=suppress_prints)
             self.data_publisher = DataPublisher(
                 lidar_controller=self.lidar,
                 camera_controller=self.camera,
@@ -129,25 +120,24 @@ class ManualDriveApp:
 
         # Initialize lidar navigator if lidar is available
         if self.use_lidar and (self.lidar is not None or lidar_port is not None):
-            self.lidar_navigator = LidarNavigator(max_speed=self.max_speed)
+            from drive.core.config import AUTONOMOUS_MAX_SPEED
+            self.lidar_navigator = LidarNavigator(max_speed=AUTONOMOUS_MAX_SPEED)
         
         # Initialize dashboard if enabled
         self.dashboard = Dashboard(self) if self.dashboard_enabled else None
-        
-        # Set error callbacks for controllers if dashboard is enabled
-        if self.dashboard is not None:
-            def error_callback(msg: str):
-                self.dashboard.add_error(msg)
-            
-            if self.motor is not None:
-                self.motor.error_callback = error_callback
-            if self.pantilt is not None:
-                self.pantilt.error_callback = error_callback
+
+        # Initialize Tuner if enabled
+        self.tuner = None
+        if self.tuner_enabled and self.lidar_navigator is not None:
+            if ParamTuner:
+                self.tuner = ParamTuner(self.lidar_navigator, self)
+            else:
+                print("Error: ParamTuner not found. Please create drive/core/tuner.py.")
     
     def _print_init_status(self):
-        """Print init status for each module (only when dashboard is disabled)."""
-        if self.dashboard_enabled:
-            return  # Skip prints when dashboard is enabled - status shown in dashboard
+        """Print init status for each module (always visible, not behind debug)."""
+        if self.dashboard_enabled or self.tuner_enabled:
+            return  # Skip prints when UI is enabled
         
         # Motor
         if not self.use_motor or self.motor is None:
@@ -216,12 +206,13 @@ class ManualDriveApp:
             # Toggle mode only if lidar is available
             if self.use_lidar and self.lidar is not None and self.lidar_navigator is not None:
                 self.autonomous_mode = not self.autonomous_mode
+                mode_str = "AUTONOMOUS" if self.autonomous_mode else "MANUAL"
+                if not self.dashboard_enabled and not self.tuner_enabled:
+                    print(f"\n[ManualDrive] Mode switched to: {mode_str}")
             elif self.autonomous_mode:
                 # If trying to enable autonomous but lidar not available, switch back to manual
                 self.autonomous_mode = False
-                if self.dashboard is not None:
-                    self.dashboard.add_error("[ManualDrive] Cannot enable autonomous mode: lidar not available. Switching to MANUAL.")
-                elif not self.dashboard_enabled:
+                if not self.dashboard_enabled and not self.tuner_enabled:
                     print("\n[ManualDrive] Cannot enable autonomous mode: lidar not available. Switching to MANUAL.")
         
         self.b_button_pressed = b_pressed
@@ -241,131 +232,57 @@ class ManualDriveApp:
         """
         Initialize camera and lidar in the main process.
         """
-        def log_error(message: str):
-            if self.dashboard is not None:
-                self.dashboard.add_error(message)
-            elif not self.dashboard_enabled:
-                print(message)
-        
+        if not self.dashboard_enabled and not self.tuner_enabled:
+            print("[ManualDrive] Initializing sensors...")
         if self.use_camera and self.camera is not None:
             try:
                 self.camera.initialize()
             except Exception as e:
-                error_msg = f"[Camera] Init failed: {e}"
                 self._init_errors["camera"] = str(e)
-                log_error(error_msg)
                 self.camera = None
                 if self.data_publisher is not None:
                     self.data_publisher.camera_controller = None
         if self.use_lidar and self.lidar is not None:
             try:
                 if not self.lidar.initialize():
-                    error_msg = "[Lidar] Init returned False"
                     self._init_errors["lidar"] = "init returned False"
-                    log_error(error_msg)
                     self.lidar = None
                     if self.data_publisher is not None:
                         self.data_publisher.lidar_controller = None
             except Exception as e:
-                error_msg = f"[Lidar] Init failed: {e}"
                 self._init_errors["lidar"] = str(e)
-                log_error(error_msg)
                 self.lidar = None
                 if self.data_publisher is not None:
                     self.data_publisher.lidar_controller = None
     
     def run(self):
         try:
-            # Start dashboard BEFORE initialization if enabled
-            if self.dashboard is not None:
-                self.dashboard.start()
-                # Small delay to let dashboard initialize
-                time.sleep(0.2)
-                self.dashboard.set_initializing(True)
-            
-            # Calculate total initialization steps for progress tracking
-            total_steps = 0
-            if self.use_camera or self.use_lidar:
-                total_steps += 1  # Sensors initialization
-            if self.enable_socket:
-                total_steps += 1  # Socket server
-            if self.use_motor:
-                total_steps += 1  # Motor
-            if self.use_joystick:
-                total_steps += 1  # Joystick
-            if self.use_pan_tilt:
-                total_steps += 1  # Pan/Tilt
-            if self.use_lidar and (self.lidar is None or not self.lidar.is_available()):
-                total_steps += 1  # Lidar (if not already initialized)
-            total_steps += 1  # Finalization
-            
-            current_step = 0
-            
-            def update_progress(step_name: str):
-                nonlocal current_step
-                current_step += 1
-                if self.dashboard is not None:
-                    progress = current_step / total_steps if total_steps > 0 else 1.0
-                    self.dashboard.update_progress(step_name, progress)
-            
-            def log_error(message: str):
-                if self.dashboard is not None:
-                    self.dashboard.add_error(message)
-                elif not self.dashboard_enabled:
-                    print(message)
+            if not self.dashboard_enabled and not self.tuner_enabled:
+                print("[ManualDrive] Initializing controllers...")
             
             # Initialize sensors (camera and lidar) if enabled
             # Initialize even if socket is not enabled (e.g., for dashboard display)
             if self.use_camera or self.use_lidar:
-                update_progress("Initialisation des capteurs...")
                 self._initialize_sensors()
-            
-            # If camera is enabled and socket is enabled, verify camera is ready before starting DataPublisher
-            # This prevents the DataPublisher thread from accessing the camera before it's fully initialized
-            # which can cause crashes on Jetson due to resource contention
-            camera_ready = False
-            if self.enable_socket and self.use_camera and self.camera is not None:
-                if self.camera.is_available():
-                    # Add delay to allow camera pipeline to stabilize (especially important on Jetson)
-                    time.sleep(CAMERA_STARTUP_DELAY)
-                    
-                    # Verify camera can actually produce frames before starting DataPublisher
-                    camera_ready = self.camera.verify_ready()
-                    if not camera_ready:
-                        # Camera initialized but cannot read frames - this is a problem but not fatal
-                        # The camera might need more time to stabilize, so we'll allow it to start
-                        # and check again later in the main loop
-                        log_error("[Camera] Warning: Camera initialized but cannot read frames yet. Pipeline may need more time to stabilize.")
-                        # Don't prevent DataPublisher from starting, but it may not get camera data initially
-                        camera_ready = True  # Allow DataPublisher to start anyway
-                else:
-                    log_error("[ManualDrive] Warning: Camera initialization failed. DataPublisher will start without camera.")
             
             # Start socket server if enabled
             if self.enable_socket and self.socket_server is not None:
-                update_progress("Démarrage du serveur socket...")
                 try:
                     self.socket_server.start()
-                    # Only start DataPublisher if camera is ready (or if camera is not enabled)
                     if self.data_publisher is not None:
-                        # If camera failed to initialize, remove it from DataPublisher
-                        if self.use_camera and (self.camera is None or not camera_ready):
-                            if self.camera is None:
-                                self.data_publisher.camera_controller = None
-                                log_error("[ManualDrive] Camera not available, DataPublisher will run without camera data")
                         self.data_publisher.start()
+                    if not self.dashboard_enabled and not self.tuner_enabled:
+                        print(f"[ManualDrive] Socket.io server running on port {self.socket_server.port}")
                 except Exception as e:
-                    log_error(f"[ManualDrive] Warning: Failed to start socket server: {e}")
+                    if not self.dashboard_enabled and not self.tuner_enabled:
+                        print(f"[ManualDrive] Warning: Failed to start socket server: {e}")
             
             # Initialiser uniquement les contrôleurs du processus parent (VESC et pan/tilt)
             if self.use_motor and self.motor is not None:
-                update_progress("Initialisation du moteur...")
                 try:
                     self.motor.initialize()
                 except Exception as e:
-                    error_msg = f"[Motor] Init failed: {e}"
                     self._init_errors["motor"] = str(e)
-                    log_error(error_msg)
                     self.motor = None
                     self.use_motor = False
             else:
@@ -373,13 +290,10 @@ class ManualDriveApp:
                 self.use_motor = False
 
             if self.use_joystick and self.joystick is not None:
-                update_progress("Initialisation du joystick...")
                 try:
                     self.joystick.initialize()
                 except Exception as e:
-                    error_msg = f"[Joystick] Init failed: {e}"
                     self._init_errors["joystick"] = str(e)
-                    log_error(error_msg)
                     self.joystick = None
                     self.use_joystick = False
             else:
@@ -387,13 +301,10 @@ class ManualDriveApp:
                 self.use_joystick = False
 
             if self.use_pan_tilt and self.pantilt is not None:
-                update_progress("Initialisation du pan/tilt...")
                 try:
                     self.pantilt.initialize()
                 except Exception as e:
-                    error_msg = f"[PanTilt] Init failed: {e}"
                     self._init_errors["pan_tilt"] = str(e)
-                    log_error(error_msg)
                     self.pantilt = None
                     self.use_pan_tilt = False
             else:
@@ -406,59 +317,58 @@ class ManualDriveApp:
             
             # Initialize lidar: either in _initialize_sensors (when enable_socket) or here
             if self.use_lidar and self.lidar is not None and not self.lidar.is_available():
-                update_progress("Initialisation du lidar...")
                 try:
                     if not self.lidar.initialize():
-                        error_msg = "[Lidar] Init returned False"
                         self._init_errors["lidar"] = "init returned False"
-                        log_error(error_msg)
                         self.lidar = None
                         if self.data_publisher is not None:
                             self.data_publisher.lidar_controller = None
                 except Exception as e:
-                    error_msg = f"[Lidar] Init failed: {e}"
                     self._init_errors["lidar"] = str(e)
-                    log_error(error_msg)
                     self.lidar = None
                     if self.data_publisher is not None:
                         self.data_publisher.lidar_controller = None
             elif self.use_lidar and self.lidar is None and self.lidar_port is not None:
-                update_progress("Initialisation du lidar...")
                 self.lidar = LidarController(serial_port=self.lidar_port, debug=self.debug_lidar)
                 try:
                     if not self.lidar.initialize():
-                        error_msg = "[Lidar] Init returned False"
                         self._init_errors["lidar"] = "init returned False"
-                        log_error(error_msg)
                         self.lidar = None
                 except Exception as e:
-                    error_msg = f"[Lidar] Init failed: {e}"
                     self._init_errors["lidar"] = str(e)
-                    log_error(error_msg)
                     self.lidar = None
 
-            # Finalize initialization
-            update_progress("Finalisation...")
-            
-            # Print init status only if dashboard is disabled
             self._print_init_status()
+            if not self.dashboard_enabled and not self.tuner_enabled:
+                print("[ManualDrive] Ready! Use BACK+START to exit. Press B to toggle autonomous/manual mode.")
             
-            # Mark initialization as complete
+            # Start dashboard if enabled
             if self.dashboard is not None:
-                self.dashboard.set_initializing(False)
+                self.dashboard.start()
+                # Small delay to let dashboard initialize
+                time.sleep(0.2)
+            
+            # Start Tuner if enabled
+            if self.tuner is not None:
+                self.tuner.start()
+                time.sleep(0.2)
 
             last_status_print = 0.0
-            last_camera_check = 0.0
-            camera_check_interval = 2.0  # Check camera every 2 seconds
 
             while self.running:
                 # Process pygame events (needed for joystick input when enabled)
                 pygame.event.pump()
 
+                # Update Tuner Input/Drawing
+                if self.tuner is not None:
+                    self.tuner.update()
+
                 if self.use_joystick and self.joystick is not None:
                     self.joystick.update()
 
                     if self._handle_exit():
+                        if not self.dashboard_enabled and not self.tuner_enabled:
+                            print("[ManualDrive] Exit requested (BACK+START).")
                         break
                     
                     # Handle mode toggle with button B
@@ -467,21 +377,7 @@ class ManualDriveApp:
                 acceleration = 0.0
                 steering = 0.0
                 lidar_scan = None
-                should_send_motor_commands = True
 
-                # Periodically check if camera can now read frames (it might need time to stabilize)
-                now = time.monotonic()
-                if self.use_camera and self.camera is not None and now - last_camera_check >= camera_check_interval:
-                    last_camera_check = now
-                    # Try to read a frame to update the can_read_frames flag
-                    if self.camera.is_available() and not self.camera.can_read_frames():
-                        # Try once to see if camera can now read frames
-                        test_frame = self.camera.get_frame()
-                        if test_frame is not None and self.dashboard is not None:
-                            # Camera started working - remove the error from dashboard
-                            # (we can't easily remove specific errors, but new frames will update the status)
-                            pass
-                
                 # Get lidar scan for dashboard (even in manual mode)
                 if self.lidar is not None and self.lidar.is_available():
                     lidar_scan = self.lidar.get_scan()
@@ -490,12 +386,10 @@ class ManualDriveApp:
                 if self.autonomous_mode and self.lidar is not None and self.lidar_navigator is not None:
                     if lidar_scan is not None and len(lidar_scan) > 0:
                         acceleration, steering = self.lidar_navigator.compute_commands(lidar_scan)
-                        should_send_motor_commands = True
                     else:
-                        # No lidar data: don't call navigation and don't send commands to motor
+                        # No lidar data, stop
                         acceleration = 0.0
                         steering = 0.0
-                        should_send_motor_commands = False
                 
                 # Manual mode: use joystick
                 else:
@@ -509,7 +403,7 @@ class ManualDriveApp:
                     if self.use_joystick and self.joystick is not None:
                         steering = self.joystick.get_steering()
 
-                if self.use_motor and self.motor is not None and should_send_motor_commands:
+                if self.use_motor and self.motor is not None:
                     self.motor.set_commands(acceleration, steering)
 
                 if self.use_pan_tilt and self.pantilt is not None and self.use_joystick and self.joystick is not None:
@@ -551,13 +445,6 @@ class ManualDriveApp:
                             lidar_max_angle = max(angles)
                     
                     mode_str = "AUTONOMOUS" if self.autonomous_mode else "MANUAL"
-                    
-                    # Get pan/tilt values even if pan/tilt is disabled
-                    pan_speed = 0.0
-                    tilt_pos = 0.0
-                    if self.pantilt is not None and hasattr(self.pantilt, 'get_position'):
-                        pan_speed, tilt_pos = self.pantilt.get_position()
-                    
                     self.dashboard.update_data(
                         acceleration=acceleration,
                         steering=steering,
@@ -570,29 +457,39 @@ class ManualDriveApp:
                         lidar_points=lidar_points,
                         lidar_min_angle=lidar_min_angle,
                         lidar_max_angle=lidar_max_angle,
-                        pan_speed=pan_speed,
-                        tilt_position=tilt_pos,
                     )
 
-                # Debug joystick output removed - displayed in dashboard instead
+                now = time.monotonic()
+                # Suppress prints if Tuner or Dashboard is active
+                if self.debug_joystick and not self.dashboard_enabled and not self.tuner_enabled and now - last_status_print > 0.2:
+                    last_status_print = now
+                    mode_str = "AUTO" if self.autonomous_mode else "MANUAL"
+                    sys.stdout.write(f"\r[{mode_str}] Duty: {acceleration:.3f} | Steer: {(steering + 1) / 2:.3f}   ")
+                    sys.stdout.flush()
 
                 time.sleep(LOOP_SLEEP_TIME)
 
         except KeyboardInterrupt:
-            pass  # Handled gracefully
+            if not self.dashboard_enabled and not self.tuner_enabled:
+                print("\n[ManualDrive] Keyboard interrupt received.")
         except Exception as e:
-            if self.dashboard is not None:
-                self.dashboard.add_error(f"[ManualDrive] Error: {e}")
-            elif not self.dashboard_enabled:
+            if not self.dashboard_enabled and not self.tuner_enabled:
                 print(f"[ManualDrive] Error: {e}")
+            # On tuner/dashboard mode, it's safer to print trace to a log or stderr
             import traceback
-            if not self.dashboard_enabled:
-                traceback.print_exc()
+            traceback.print_exc()
         finally:
             self.cleanup()
 
     def cleanup(self):
         """Clean up resources."""
+        if not self.dashboard_enabled and not self.tuner_enabled:
+            print("[ManualDrive] Cleaning up...")
+        
+        # Stop Tuner if enabled
+        if self.tuner is not None:
+            self.tuner.stop()
+
         # Stop dashboard if enabled
         if self.dashboard is not None:
             self.dashboard.stop()
@@ -615,3 +512,6 @@ class ManualDriveApp:
         # Stop pan/tilt
         if self.use_pan_tilt and self.pantilt is not None:
             self.pantilt.stop()
+        
+        if not self.dashboard_enabled and not self.tuner_enabled:
+            print("[ManualDrive] Shutdown complete.")
