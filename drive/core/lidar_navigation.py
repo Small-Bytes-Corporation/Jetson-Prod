@@ -20,12 +20,16 @@ LIDAR_TO_REAR = 0.04
 LIDAR_ROTATION_OFFSET = 90.0
 
 # --- Default Tuning Values (Optimized for VESC stability) ---
-DEFAULT_BUBBLE_RADIUS = 1.0
+DEFAULT_BUBBLE_RADIUS = 0.4
 DEFAULT_CRITICAL_BUFFER = 0.15 
 # Augmenté à -0.22 pour vaincre le "cogging" (hésitation moteur)
 DEFAULT_REVERSE_SPEED = -0.03 
 # Augmenté à 2.0s pour être SÛR que les roues sont arrêtées
 DEFAULT_STOP_TIME = 2.0       
+
+# Angle limite pour l'application de la Safety Bubble
+# Si l'obstacle est en dehors de ce cône (ex: sur le côté à 90°), on ne crée pas de bulle.
+BUBBLE_ENABLE_ANGLE = 30.0 
 
 class NavState(Enum):
     FORWARD = auto()
@@ -123,7 +127,6 @@ class LidarNavigator:
         elif self.state == NavState.REVERSING:
             # SOFT START RAMP:
             # On monte progressivement la puissance de 0 à reverse_speed sur 0.5 sec
-            # Cela aide le VESC à synchroniser le moteur sans "grincement"
             ramp_speed = 0.02 # Incrément par tick (20Hz -> ~0.4/sec)
             
             # self.reverse_speed est négatif (ex: -0.22)
@@ -178,14 +181,28 @@ class LidarNavigator:
         return arr[arr[:, 0].argsort()]
 
     def _apply_safety_bubble(self, ranges: np.ndarray, closest_idx: int, min_dist: float) -> np.ndarray:
+        """
+        Zero out data points within a radius of the closest obstacle.
+        MODIFICATION: Only applies if the obstacle is within +/- 30 degrees (BUBBLE_ENABLE_ANGLE).
+        """
         proc_ranges = ranges.copy()
         if min_dist < self.max_lidar_dist:
             if min_dist < 0.1: min_dist = 0.1
-            angle_radius_rad = np.arctan(self.robot_bubble_radius / min_dist)
-            angle_radius_deg = np.degrees(angle_radius_rad)
+            
             closest_angle = ranges[closest_idx, 0]
-            mask = np.abs(proc_ranges[:, 0] - closest_angle) < angle_radius_deg
-            proc_ranges[mask, 1] = 0.0
+            
+            # --- MODIFICATION START ---
+            # On vérifie si l'obstacle le plus proche est "devant" nous.
+            # Si l'obstacle est sur le côté (ex: > 30° ou < -30°), on ne gonfle pas la bulle.
+            # Cela permet de passer près des murs latéraux sans dévier excessivement.
+            if abs(closest_angle) <= BUBBLE_ENABLE_ANGLE:
+                angle_radius_rad = np.arctan(self.robot_bubble_radius / min_dist)
+                angle_radius_deg = np.degrees(angle_radius_rad)
+                
+                mask = np.abs(proc_ranges[:, 0] - closest_angle) < angle_radius_deg
+                proc_ranges[mask, 1] = 0.0
+            # --- MODIFICATION END ---
+            
         return proc_ranges
 
     def _find_max_gap(self, ranges: np.ndarray) -> Tuple[int, int]:
