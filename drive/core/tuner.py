@@ -3,6 +3,7 @@ Ncurses-based parameter tuner for Lidar Navigation.
 Allows modifying variables at runtime.
 """
 
+import sys
 import curses
 import time
 
@@ -34,22 +35,29 @@ class ParamTuner:
         self.draw_rate = 0.1 # 10Hz UI update
 
     def start(self):
-        """Initialize curses."""
-        if self.running: return
-        self.stdscr = curses.initscr()
-        curses.noecho()
-        curses.cbreak()
-        self.stdscr.keypad(True)
-        self.stdscr.nodelay(True) # Non-blocking input
-        curses.curs_set(0) # Hide cursor
-        
-        # Colors
-        curses.start_color()
-        curses.init_pair(1, curses.COLOR_BLACK, curses.COLOR_CYAN) # Highlight
-        curses.init_pair(2, curses.COLOR_GREEN, curses.COLOR_BLACK) # Values
-        curses.init_pair(3, curses.COLOR_RED, curses.COLOR_BLACK)   # Alert
-        
-        self.running = True
+        """Initialize curses. Requires an interactive TTY (no pipes/redirects)."""
+        if self.running:
+            return
+        if not sys.stdout.isatty():
+            print("[Tuner] Skipped: requires an interactive terminal. Run directly in a TTY (no pipes/redirects).")
+            return
+        try:
+            self.stdscr = curses.initscr()
+            curses.noecho()
+            curses.cbreak()
+            self.stdscr.keypad(True)
+            self.stdscr.nodelay(True)  # Non-blocking input
+            curses.curs_set(0)  # Hide cursor
+
+            # Colors
+            curses.start_color()
+            curses.init_pair(1, curses.COLOR_BLACK, curses.COLOR_CYAN)  # Highlight
+            curses.init_pair(2, curses.COLOR_GREEN, curses.COLOR_BLACK)  # Values
+            curses.init_pair(3, curses.COLOR_RED, curses.COLOR_BLACK)    # Alert
+
+            self.running = True
+        except curses.error as e:
+            print(f"[Tuner] Skipped: curses init failed ({e}). Ensure TERM is set and you're in an interactive terminal.")
 
     def stop(self):
         """Restore terminal."""

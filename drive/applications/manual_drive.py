@@ -385,13 +385,13 @@ class ManualDriveApp:
                     lidar_scan = self.lidar.get_scan()
 
                 # Autonomous mode: use lidar navigation
+                update_motor = True  # Always update in manual mode
                 if self.autonomous_mode and self.lidar is not None and self.lidar_navigator is not None:
                     if lidar_scan is not None and len(lidar_scan) > 0:
                         acceleration, steering = self.lidar_navigator.compute_commands(lidar_scan)
                     else:
-                        # No lidar data, stop
-                        acceleration = 0.0
-                        steering = 0.0
+                        # No lidar data: do NOT update motor (keep last commands for smoothness)
+                        update_motor = False
                 
                 # Manual mode: use joystick
                 else:
@@ -405,7 +405,7 @@ class ManualDriveApp:
                     if self.use_joystick and self.joystick is not None:
                         steering = self.joystick.get_steering()
 
-                if self.use_motor and self.motor is not None:
+                if self.use_motor and self.motor is not None and update_motor:
                     self.motor.set_commands(acceleration, steering)
 
                 if self.use_pan_tilt and self.pantilt is not None and self.use_joystick and self.joystick is not None:
