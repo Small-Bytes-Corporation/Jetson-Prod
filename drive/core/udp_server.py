@@ -1,12 +1,11 @@
 """
-UDP server for broadcasting sensor data.
+UDP server for broadcasting camera data.
 """
 
 import json
 import socket
-import threading
 import time
-from .config import UDP_PORT, UDP_HOST, UDP_HEARTBEAT_TIMEOUT
+from .config import UDP_PORT, UDP_HOST
 
 try:
     import netifaces
@@ -45,8 +44,8 @@ def _payload_for_debug(data, max_str_len=200, max_list_len=10):
 
 class UDPServer:
     """
-    UDP server for broadcasting sensor data to clients.
-    Uses UDP broadcast to send data and heartbeat mechanism to track connected clients.
+    UDP server for broadcasting camera data.
+    Uses UDP broadcast to send camera data to clients.
     """
 
     def __init__(self, port=UDP_PORT, host=UDP_HOST, debug_payload=False, suppress_debug_prints=False):
@@ -66,25 +65,12 @@ class UDPServer:
         
         # UDP socket for sending data
         self.send_socket = None
-        
-        # UDP socket for receiving heartbeats
-        self.receive_socket = None
-        
-        # Thread for receiving heartbeats
-        self.receive_thread = None
         self.running = False
-        
-        # Track connected clients: {(ip, port): last_heartbeat_time}
-        self.clients = {}
-        self.clients_lock = threading.Lock()
         
         # Track last emitted data for dashboard
         self.last_sensor_data_time = None
         self.last_status_time = None
         self.last_sensor_data_size = None
-        
-        # Cleanup thread for removing stale clients
-        self.cleanup_thread = None
 
     def _get_broadcast_address(self):
         """Get the broadcast address of the active network interface."""
@@ -114,8 +100,8 @@ class UDPServer:
         # Final fallback: use configured host or default broadcast
         return self.host if self.host != '255.255.255.255' else '255.255.255.255'
 
-    def _setup_sockets(self):
-        """Setup UDP sockets for sending and receiving."""
+    def _setup_socket(self):
+        """Setup UDP socket for sending camera data."""
         try:
             # Determine broadcast address
             self.broadcast_addr = self._get_broadcast_address()
@@ -126,28 +112,19 @@ class UDPServer:
             # Bind to all interfaces for sending
             self.send_socket.bind(('0.0.0.0', 0))
             
-            # Socket for receiving heartbeats
-            self.receive_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-            self.receive_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-            self.receive_socket.bind(('0.0.0.0', self.port))
-            self.receive_socket.settimeout(1.0)  # 1 second timeout for checking running flag
-            
             if not self.suppress_debug_prints:
                 print(f"[UDP] Using broadcast address: {self.broadcast_addr}")
             
             return True
         except Exception as e:
             if not self.suppress_debug_prints:
-                print(f"[UDP] Error setting up sockets: {e}")
+                print(f"[UDP] Error setting up socket: {e}")
             # Fallback: try without netifaces
             try:
                 self.broadcast_addr = '255.255.255.255'
                 self.send_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
                 self.send_socket.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
-                self.receive_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-                self.receive_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-                self.receive_socket.bind(('0.0.0.0', self.port))
-                self.receive_socket.settimeout(1.0)
+                self.send_socket.bind(('0.0.0.0', 0))
                 if not self.suppress_debug_prints:
                     print(f"[UDP] Fallback: Using {self.broadcast_addr} as broadcast address")
                 return True
@@ -156,49 +133,6 @@ class UDPServer:
                     print(f"[UDP] Fallback also failed: {e2}")
                 return False
 
-    def _receive_heartbeats(self):
-        """Thread function to receive heartbeat messages from clients."""
-        while self.running:
-            try:
-                data, addr = self.receive_socket.recvfrom(1024)
-                try:
-                    message = json.loads(data.decode('utf-8'))
-                    if message.get('type') == 'heartbeat':
-                        with self.clients_lock:
-                            self.clients[addr] = time.time()
-                            if not self.suppress_debug_prints:
-                                print(f"[UDP] Heartbeat received from {addr} ({len(self.clients)} clients)")
-                except (json.JSONDecodeError, UnicodeDecodeError, KeyError):
-                    # Ignore invalid messages
-                    pass
-            except socket.timeout:
-                # Timeout is expected, continue loop to check running flag
-                continue
-            except Exception as e:
-                if self.running:  # Only print if we're supposed to be running
-                    if not self.suppress_debug_prints:
-                        print(f"[UDP] Error receiving heartbeat: {e}")
-
-    def _cleanup_stale_clients(self):
-        """Thread function to remove clients that haven't sent heartbeats recently."""
-        while self.running:
-            try:
-                current_time = time.time()
-                with self.clients_lock:
-                    stale_clients = [
-                        addr for addr, last_time in self.clients.items()
-                        if current_time - last_time > UDP_HEARTBEAT_TIMEOUT
-                    ]
-                    for addr in stale_clients:
-                        del self.clients[addr]
-                        if not self.suppress_debug_prints:
-                            print(f"[UDP] Client {addr} timed out ({len(self.clients)} clients)")
-                time.sleep(1.0)  # Check every second
-            except Exception as e:
-                if self.running:
-                    if not self.suppress_debug_prints:
-                        print(f"[UDP] Error in cleanup thread: {e}")
-
     def start(self):
         """Start the UDP server."""
         if self.running:
@@ -206,20 +140,12 @@ class UDPServer:
                 print("[UDP] Server already running")
             return
 
-        if not self._setup_sockets():
+        if not self._setup_socket():
             if not self.suppress_debug_prints:
-                print("[UDP] Failed to setup sockets")
+                print("[UDP] Failed to setup socket")
             return
 
         self.running = True
-
-        # Start thread for receiving heartbeats
-        self.receive_thread = threading.Thread(target=self._receive_heartbeats, daemon=True)
-        self.receive_thread.start()
-
-        # Start thread for cleaning up stale clients
-        self.cleanup_thread = threading.Thread(target=self._cleanup_stale_clients, daemon=True)
-        self.cleanup_thread.start()
 
         if not self.suppress_debug_prints:
             print(f"[UDP] Starting server on {self.host}:{self.port} (broadcast)")
@@ -232,22 +158,11 @@ class UDPServer:
         self.running = False
 
         try:
-            if self.receive_socket:
-                self.receive_socket.close()
             if self.send_socket:
                 self.send_socket.close()
         except Exception as e:
             if not self.suppress_debug_prints:
                 print(f"[UDP] Error stopping server: {e}")
-
-        # Wait for threads to finish
-        if self.receive_thread:
-            self.receive_thread.join(timeout=2.0)
-        if self.cleanup_thread:
-            self.cleanup_thread.join(timeout=2.0)
-
-        with self.clients_lock:
-            self.clients.clear()
 
         if not self.suppress_debug_prints:
             print("[UDP] Server stopped")
@@ -280,7 +195,7 @@ class UDPServer:
             return False
 
     def emit_sensor_data(self, data):
-        """Emit sensor data to all connected clients via UDP broadcast."""
+        """Emit sensor data via UDP broadcast."""
         if self.running:
             try:
                 if self.debug_payload and not self.suppress_debug_prints:
@@ -301,7 +216,7 @@ class UDPServer:
                     print(f"[UDP] Error emitting sensor_data: {e}")
 
     def emit_status(self, status):
-        """Emit status information to all connected clients via UDP broadcast."""
+        """Emit status information via UDP broadcast."""
         if self.running:
             try:
                 if self.debug_payload and not self.suppress_debug_prints:
@@ -314,11 +229,6 @@ class UDPServer:
             except Exception as e:
                 if not self.suppress_debug_prints:
                     print(f"[UDP] Error emitting status: {e}")
-
-    def get_client_count(self):
-        """Return number of connected clients."""
-        with self.clients_lock:
-            return len(self.clients)
 
     def is_running(self):
         """Return whether the server is running."""
