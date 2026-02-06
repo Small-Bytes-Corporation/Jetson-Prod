@@ -24,7 +24,7 @@ LIDAR_ROTATION_OFFSET = 90.0
 
 # --- Default Tuning Values ---
 DEFAULT_BUBBLE_RADIUS = 1.0    # Augmenté car il sera réduit sur les côtés par le calcul
-DEFAULT_CRITICAL_BUFFER = 1.0  # Augmenté pour détecter plus loin devant (0.16 + 0.25 = 0.41m)
+DEFAULT_CRITICAL_BUFFER = 0.5  # Augmenté pour détecter plus loin devant (0.16 + 0.25 = 0.41m)
 DEFAULT_REVERSE_SPEED = -0.03 
 DEFAULT_STOP_TIME = 1.5
 
