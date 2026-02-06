@@ -1,6 +1,7 @@
 """
 Advanced Navigation Algorithm - State Machine based Follow the Gap.
 Refactored to allow Runtime Tuning via Ncurses.
+Includes Soft-Start for Reverse to prevent VESC Cogging.
 """
 
 import math
@@ -13,16 +14,18 @@ from .config import (
     AUTONOMOUS_FIELD_OF_VIEW, AUTONOMOUS_LOOKAHEAD_DISTANCE, AUTONOMOUS_GAP_THRESHOLD
 )
 
-# Physical dimensions (fixed, generally don't change at runtime)
+# Physical dimensions (fixed)
 LIDAR_TO_FRONT = 0.16
 LIDAR_TO_REAR = 0.04
 LIDAR_ROTATION_OFFSET = 90.0
 
-# Initial Default Values (used if not passed in init)
+# --- Default Tuning Values (Optimized for VESC stability) ---
 DEFAULT_BUBBLE_RADIUS = 0.40
 DEFAULT_CRITICAL_BUFFER = 0.15 
-DEFAULT_REVERSE_SPEED = -0.15
-DEFAULT_STOP_TIME = 1.0
+# Augmenté à -0.22 pour vaincre le "cogging" (hésitation moteur)
+DEFAULT_REVERSE_SPEED = -0.22 
+# Augmenté à 2.0s pour être SÛR que les roues sont arrêtées
+DEFAULT_STOP_TIME = 2.0       
 
 class NavState(Enum):
     FORWARD = auto()
@@ -44,7 +47,7 @@ class LidarNavigator:
         lookahead_distance: float = AUTONOMOUS_LOOKAHEAD_DISTANCE,
         gap_threshold: float = AUTONOMOUS_GAP_THRESHOLD,
     ):
-        # --- Tunable Parameters (Public for TUI access) ---
+        # --- Tunable Parameters ---
         self.max_speed = max_speed
         self.min_speed = min_speed
         self.safety_distance = safety_distance
@@ -52,7 +55,7 @@ class LidarNavigator:
         self.gap_threshold = gap_threshold
         
         # Advanced tuning
-        self.alpha_steering = 0.6            # Smoothing
+        self.alpha_steering = 0.6
         self.robot_bubble_radius = DEFAULT_BUBBLE_RADIUS
         self.safety_buffer = DEFAULT_CRITICAL_BUFFER
         self.stop_wait_time = DEFAULT_STOP_TIME
@@ -69,6 +72,9 @@ class LidarNavigator:
         # Internal memory
         self.last_steering = 0.0
         self.last_gap_center_steering = 0.0
+        
+        # Soft-start ramp for reverse
+        self.current_reverse_power = 0.0
 
     @property
     def critical_distance(self):
@@ -91,9 +97,8 @@ class LidarNavigator:
         # --- STATE MACHINE ---
         
         if self.state == NavState.FORWARD:
-            # Use dynamic critical_distance
+            # Check blockage
             if min_dist < self.critical_distance:
-                # Debug print removed to not mess up ncurses
                 self.state = NavState.BRAKING_TO_REVERSE
                 self.state_timer = current_time
                 acceleration = 0.0
@@ -108,12 +113,28 @@ class LidarNavigator:
         elif self.state == NavState.BRAKING_TO_REVERSE:
             acceleration = 0.0
             steering = self.last_steering
+            # Reset ramp
+            self.current_reverse_power = 0.0
+            
             if (current_time - self.state_timer) > self.stop_wait_time:
                 self.state = NavState.REVERSING
                 self.state_timer = current_time
 
         elif self.state == NavState.REVERSING:
-            acceleration = self.reverse_speed
+            # SOFT START RAMP:
+            # On monte progressivement la puissance de 0 à reverse_speed sur 0.5 sec
+            # Cela aide le VESC à synchroniser le moteur sans "grincement"
+            ramp_speed = 0.02 # Incrément par tick (20Hz -> ~0.4/sec)
+            
+            # self.reverse_speed est négatif (ex: -0.22)
+            if self.current_reverse_power > self.reverse_speed:
+                self.current_reverse_power -= ramp_speed
+                if self.current_reverse_power < self.reverse_speed:
+                    self.current_reverse_power = self.reverse_speed
+            
+            acceleration = self.current_reverse_power
+            
+            # Invert steering
             steering = -1.0 * np.sign(self.last_gap_center_steering)
             if abs(steering) < 0.1: steering = 0.0
             
