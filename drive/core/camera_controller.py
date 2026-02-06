@@ -21,6 +21,7 @@ def _is_depthai_v3(dai_module):
 class CameraController:
     """
     Controller for DepthAI camera - captures raw frames only.
+    Includes thread safety and error recovery.
     """
     
     def __init__(self, width=CAM_WIDTH, height=CAM_HEIGHT, fps=CAM_FPS, debug=False):
@@ -34,7 +35,7 @@ class CameraController:
         self._initialized = False
         self._use_v3 = _is_depthai_v3(dai)
         
-        # Thread safety
+        # Lock to prevent race conditions (e.g. Dashboard vs DataPublisher)
         self._frame_lock = threading.Lock()
     
     def initialize(self):
@@ -43,9 +44,8 @@ class CameraController:
         """
         try:
             pipeline = dai.Pipeline()
-            
             if self._use_v3:
-                # DepthAI 3.3+ logic
+                # DepthAI 3.3+
                 cam = pipeline.create(dai.node.Camera).build()
                 rgb_type = getattr(getattr(dai, "ImgFrame", None), "Type", None)
                 rgb_type = getattr(rgb_type, "RGB888p", None) if rgb_type else None
@@ -56,46 +56,43 @@ class CameraController:
                         camera_output = cam.requestOutput((self.width, self.height))
                 except TypeError:
                     camera_output = cam.requestOutput(size=(self.width, self.height))
-
+                
                 self.q_rgb = camera_output.createOutputQueue()
                 pipeline.start()
                 self._pipeline = pipeline
                 self.device = True
             else:
-                # DepthAI 2.x logic
+                # DepthAI 2.x
                 if hasattr(pipeline, "create") and hasattr(dai, "node") and getattr(dai.node, "ColorCamera", None) is not None:
                     cam = pipeline.create(dai.node.ColorCamera)
                     xout = pipeline.create(dai.node.XLinkOut)
                 else:
                     cam = pipeline.createColorCamera()
                     xout = pipeline.createXLinkOut()
-                
                 cam.setPreviewSize(self.width, self.height)
                 cam.setInterleaved(False)
                 cam.setFps(self.fps)
                 xout.setStreamName("rgb")
                 cam.preview.link(xout.input)
                 
-                # Device selection
                 device_info = None
                 if hasattr(dai, "Device") and hasattr(dai.Device, "getAllAvailableDevices"):
                     available = dai.Device.getAllAvailableDevices()
                     if available:
                         device_info = available[0]
-                
                 try:
                     self.device = dai.Device(pipeline, device_info) if device_info else dai.Device(pipeline)
                 except TypeError:
                     self.device = dai.Device(pipeline)
                 
-                # Output queue (NON-BLOCKING IS CRITICAL)
+                # Critical: blocking=False prevents freezing if queue is full
                 self.q_rgb = self.device.getOutputQueue("rgb", maxSize=4, blocking=False)
             
             self._initialized = True
             if self.debug:
                 print(f"[Camera] Initialized: {self.width}x{self.height} @ {self.fps}fps")
-                
-            # Warmup sleep to prevent X_LINK_ERROR on immediate access
+            
+            # Warmup to allow XLink to stabilize
             time.sleep(1.0)
             
         except Exception as e:
@@ -103,14 +100,15 @@ class CameraController:
     
     def get_frame(self):
         """
-        Get the latest frame from the camera. Safe against X_LINK_ERROR.
+        Get the latest frame from the camera.
+        Handles X_LINK_ERROR gracefully.
         """
         if not self._initialized or self.q_rgb is None:
             return None
         
         with self._frame_lock:
             try:
-                # tryGet is non-blocking and safer
+                # tryGet is safer than get() for real-time loops
                 if hasattr(self.q_rgb, "tryGet"):
                     frame_in = self.q_rgb.tryGet()
                 else:
@@ -122,11 +120,12 @@ class CameraController:
                 return frame_in.getCvFrame()
             
             except Exception as e:
-                # Catch X_LINK_ERROR or RuntimeErrors without crashing the app
-                err_msg = str(e)
-                if self.debug and "X_LINK_ERROR" not in err_msg:
-                    # Only print non-X_LINK errors to avoid spamming console
-                    print(f"[Camera] Error getting frame: {e}")
+                # Catch X_LINK_ERROR or generic RuntimeError
+                # Do NOT crash, just return None. System will retry next loop.
+                err = str(e)
+                if self.debug and "X_LINK_ERROR" not in err:
+                     # Only print non-X_LINK errors to reduce spam
+                    print(f"[Camera] Frame error: {e}")
                 return None
     
     def is_available(self):
@@ -145,3 +144,10 @@ class CameraController:
             self.device = None
             self._pipeline = None
             self.q_rgb = None
+    
+    def __enter__(self):
+        self.initialize()
+        return self
+    
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        self.stop()
