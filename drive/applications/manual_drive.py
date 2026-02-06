@@ -11,7 +11,7 @@ import time
 import pygame
 from drive.core import (
     MotorController, JoystickController, ThrottleController, CameraController,
-    LidarController, LidarNavigator, PanTiltController, SocketServer, DataPublisher
+    LidarController, LidarNavigator, PanTiltController, UDPServer, DataPublisher
 )
 from drive.core.dashboard import Dashboard
 # Import optionnel du Tuner (supposant que drive/core/tuner.py existe)
@@ -97,7 +97,7 @@ class ManualDriveApp:
         if enable_socket:
             # Suppress debug prints if dashboard OR tuner is enabled
             suppress_prints = dashboard or tuner
-            self.socket_server = SocketServer(port=socket_port, debug_payload=socket_debug, suppress_debug_prints=suppress_prints)
+            self.socket_server = UDPServer(port=socket_port, debug_payload=socket_debug, suppress_debug_prints=suppress_prints)
             self.data_publisher = DataPublisher(
                 lidar_controller=self.lidar,
                 camera_controller=self.camera,
