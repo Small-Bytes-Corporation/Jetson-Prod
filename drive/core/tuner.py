@@ -1,11 +1,12 @@
 """
 Rich-based parameter tuner for Lidar Navigation.
-Allows modifying variables at runtime. Works without TTY (unlike curses).
+Allows modifying variables at runtime. Sliders work with mouse or keyboard.
 """
 
 import sys
 import time
 import select
+import re
 
 from rich.console import Console
 from rich.live import Live
@@ -23,11 +24,21 @@ try:
 except ImportError:
     HAS_TERMIOS = False
 
-# Key constants (match curses semantics)
+# Key constants
 KEY_UP = "up"
 KEY_DOWN = "down"
 KEY_LEFT = "left"
 KEY_RIGHT = "right"
+
+# Slider config
+SLIDER_WIDTH = 18
+# Approximate terminal layout for mouse mapping (1-based row/col)
+MOUSE_FIRST_PARAM_ROW = 6   # first param row in terminal
+MOUSE_SLIDER_START_COL = 21  # column where slider bar starts
+
+# Mouse escape sequences (xterm)
+MOUSE_ENABLE = "\x1b[?1000h"   # report mouse press/release
+MOUSE_DISABLE = "\x1b[?1000l"
 
 
 class ParamTuner:
@@ -70,10 +81,13 @@ class ParamTuner:
                 transient=False,
             )
             self.live.start()
-            # Setup raw stdin for keyboard (Unix only, when TTY)
+            # Setup raw stdin for keyboard + mouse (Unix only, when TTY)
             if HAS_TERMIOS and sys.stdin.isatty():
                 self._termios_attrs = termios.tcgetattr(sys.stdin)
                 tty.setcbreak(sys.stdin.fileno())
+                # Enable mouse tracking
+                sys.stdout.write(MOUSE_ENABLE)
+                sys.stdout.flush()
             self.running = True
         except Exception as e:
             print(f"[Tuner] Start failed: {e}")
@@ -85,6 +99,8 @@ class ParamTuner:
         self.running = False
         if self._termios_attrs is not None and HAS_TERMIOS:
             try:
+                sys.stdout.write(MOUSE_DISABLE)
+                sys.stdout.flush()
                 termios.tcsetattr(sys.stdin, termios.TCSADRAIN, self._termios_attrs)
             except Exception:
                 pass
@@ -96,32 +112,50 @@ class ParamTuner:
                 pass
             self.live = None
 
-    def _read_key(self):
-        """Non-blocking read of a single key. Returns None if no key, or KEY_UP/DOWN/LEFT/RIGHT."""
+    def _read_input(self):
+        """Non-blocking read. Returns None, KEY_*, or ('mouse', row, col, button)."""
         if not HAS_TERMIOS or not sys.stdin.isatty():
             return None
-        # Check if stdin has data (non-blocking)
         rlist, _, _ = select.select([sys.stdin], [], [], 0)
         if not rlist:
             return None
         try:
             ch = sys.stdin.read(1)
-            if ch == "\x1b":  # ESC - might be arrow key
-                # Read rest of escape sequence (e.g. [A for up)
-                rlist, _, _ = select.select([sys.stdin], [], [], 0.05)
-                if rlist:
-                    seq = sys.stdin.read(2)
-                    if seq == "[A":
-                        return KEY_UP
-                    if seq == "[B":
-                        return KEY_DOWN
-                    if seq == "[C":
-                        return KEY_RIGHT
-                    if seq == "[D":
-                        return KEY_LEFT
+            if ch == "\x1b":
+                # Read rest of escape sequence
+                buf = self._read_escape_seq(timeout=0.06)
+                if buf == "[A":
+                    return KEY_UP
+                if buf == "[B":
+                    return KEY_DOWN
+                if buf == "[C":
+                    return KEY_RIGHT
+                if buf == "[D":
+                    return KEY_LEFT
+                # Mouse: \x1b[<b;x;y;M or m
+                m = re.match(r"\[<(\d+);(\d+);(\d+);([Mm])", buf)
+                if m:
+                    btn, x, y = int(m.group(1)), int(m.group(2)), int(m.group(3))
+                    return ("mouse", y, x, btn)  # row, col (1-based)
             return None
         except (BlockingIOError, OSError):
             return None
+
+    def _read_escape_seq(self, timeout=0.05):
+        """Read remaining bytes of an escape sequence."""
+        buf = []
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            rlist, _, _ = select.select([sys.stdin], [], [], 0.01)
+            if not rlist:
+                break
+            c = sys.stdin.read(1)
+            if not c:
+                break
+            buf.append(c)
+            if buf[-1] in "Mm" or (len(buf) >= 2 and buf[-1] in "ABCD"):
+                break
+        return "".join(buf)
 
     def update(self):
         """Called inside the main loop to handle input and drawing."""
@@ -129,9 +163,9 @@ class ParamTuner:
             return
 
         # 1. Handle Input
-        key = self._read_key()
-        if key is not None:
-            self._handle_input(key)
+        evt = self._read_input()
+        if evt is not None:
+            self._handle_input(evt)
 
         # 2. Draw (limit FPS to save CPU)
         now = time.time()
@@ -139,15 +173,29 @@ class ParamTuner:
             self.live.update(self._build_interface())
             self.last_draw = now
 
-    def _handle_input(self, key):
-        if key == KEY_UP:
+    def _handle_input(self, evt):
+        if evt == KEY_UP:
             self.selected_idx = max(0, self.selected_idx - 1)
-        elif key == KEY_DOWN:
+        elif evt == KEY_DOWN:
             self.selected_idx = min(len(self.params) - 1, self.selected_idx + 1)
-        elif key == KEY_LEFT:
+        elif evt == KEY_LEFT:
             self._change_value(-1)
-        elif key == KEY_RIGHT:
+        elif evt == KEY_RIGHT:
             self._change_value(1)
+        elif isinstance(evt, tuple) and evt[0] == "mouse":
+            self._handle_mouse_click(evt[1], evt[2], evt[3])
+
+    def _handle_mouse_click(self, row, col, button):
+        """Map mouse click to parameter selection and slider value."""
+        param_idx = row - MOUSE_FIRST_PARAM_ROW
+        if 0 <= param_idx < len(self.params):
+            self.selected_idx = param_idx
+            # Map column to value (slider range)
+            rel = (col - MOUSE_SLIDER_START_COL) / SLIDER_WIDTH
+            rel = max(0.0, min(1.0, rel))
+            label, attr, step, min_v, max_v, fmt = self.params[param_idx]
+            new_val = min_v + rel * (max_v - min_v)
+            setattr(self.nav, attr, new_val)
 
     def _change_value(self, direction):
         label, attr, step, min_v, max_v, fmt = self.params[self.selected_idx]
@@ -156,28 +204,38 @@ class ParamTuner:
         new_val = max(min_v, min(max_v, new_val))
         setattr(self.nav, attr, new_val)
 
+    def _slider_bar(self, val, min_v, max_v):
+        """Build slider string: [████░░░░] (val normalized to 0..1)."""
+        r = max_v - min_v
+        rel = (val - min_v) / r if r > 0 else 0
+        rel = max(0, min(1, rel))
+        filled = int(rel * SLIDER_WIDTH)
+        return "[" + "█" * filled + "░" * (SLIDER_WIDTH - filled) + "]"
+
     def _build_interface(self):
         """Build the Rich renderable for the tuner UI."""
         layout = Layout()
 
-        # Parameters table (left)
+        # Parameters table (left) with sliders
         params_table = Table(
             show_header=True,
             header_style="bold cyan",
-            title="PARAMETERS (↑↓ select, ←→ change)",
+            title="PARAMETERS (↑↓ or click row to select, ←→ or drag slider)",
             box=box.ROUNDED,
             border_style="cyan",
         )
         params_table.add_column("", width=2)
-        params_table.add_column("Parameter", style="cyan", width=15)
-        params_table.add_column("Value", width=12)
+        params_table.add_column("Parameter", style="cyan", width=12)
+        params_table.add_column("Slider", width=SLIDER_WIDTH + 2)
+        params_table.add_column("Value", width=10)
 
         for i, (label, attr, step, min_v, max_v, fmt) in enumerate(self.params):
             val = getattr(self.nav, attr)
             val_str = fmt.format(val)
+            bar = self._slider_bar(val, min_v, max_v)
             marker = "▶" if i == self.selected_idx else " "
             row_style = "bold reverse cyan" if i == self.selected_idx else None
-            params_table.add_row(marker, label, val_str, style=row_style)
+            params_table.add_row(marker, label, bar, val_str, style=row_style)
 
         # Telemetry table (right)
         state_str = str(self.nav.state).replace("NavState.", "")
