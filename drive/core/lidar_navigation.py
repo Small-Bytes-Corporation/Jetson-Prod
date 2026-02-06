@@ -1,7 +1,7 @@
 """
 Advanced Navigation Algorithm - State Machine based Follow the Gap.
 Refactored to allow Runtime Tuning via Ncurses.
-Includes Soft-Start for Reverse to prevent VESC Cogging.
+Includes Soft-Start for Reverse & Stuck Detection.
 """
 
 import math
@@ -19,17 +19,18 @@ LIDAR_TO_FRONT = 0.16
 LIDAR_TO_REAR = 0.04
 LIDAR_ROTATION_OFFSET = 90.0
 
-# --- Default Tuning Values (Optimized for VESC stability) ---
+# --- Default Tuning Values ---
 DEFAULT_BUBBLE_RADIUS = 0.4
 DEFAULT_CRITICAL_BUFFER = 0.15 
-# Augmenté à -0.22 pour vaincre le "cogging" (hésitation moteur)
-DEFAULT_REVERSE_SPEED = -0.03 
-# Augmenté à 2.0s pour être SÛR que les roues sont arrêtées
-DEFAULT_STOP_TIME = 2.0       
+DEFAULT_REVERSE_SPEED = -0.22  # Vitesse suffisante pour vaincre le cogging
+DEFAULT_STOP_TIME = 2.0        # Temps d'arrêt pour protéger le VESC
 
-# Angle limite pour l'application de la Safety Bubble
-# Si l'obstacle est en dehors de ce cône (ex: sur le côté à 90°), on ne crée pas de bulle.
+# Angle limite pour la Safety Bubble (seulement devant)
 BUBBLE_ENABLE_ANGLE = 30.0 
+
+# Paramètres de détection de blocage (Stuck Detection)
+STUCK_TIMEOUT = 2.0            # Temps sans mouvement avant de déclencher la marche arrière
+STUCK_VARIATION_THRESHOLD = 0.05 # 5cm : Si le lidar varie moins que ça, on est considéré immobile
 
 class NavState(Enum):
     FORWARD = auto()
@@ -76,9 +77,11 @@ class LidarNavigator:
         # Internal memory
         self.last_steering = 0.0
         self.last_gap_center_steering = 0.0
-        
-        # Soft-start ramp for reverse
         self.current_reverse_power = 0.0
+        
+        # Stuck Detection Memory
+        self.stuck_timer = 0.0
+        self.previous_min_dist = 0.0
 
     @property
     def critical_distance(self):
@@ -101,12 +104,32 @@ class LidarNavigator:
         # --- STATE MACHINE ---
         
         if self.state == NavState.FORWARD:
-            # Check blockage
+            
+            # --- 1. DETECTION OBSTACLE CRITIQUE ---
             if min_dist < self.critical_distance:
+                print(f"[Nav] Obstacle critique ({min_dist:.2f}m). Recul.")
                 self.state = NavState.BRAKING_TO_REVERSE
                 self.state_timer = current_time
                 acceleration = 0.0
+                
+            # --- 2. DETECTION DE BLOCAGE (PATINAGE) ---
+            # Si la distance minimale ne change pas assez alors qu'on essaye d'avancer
+            elif abs(min_dist - self.previous_min_dist) < STUCK_VARIATION_THRESHOLD:
+                # Si ça fait plus de 2 secondes que ça ne bouge pas
+                if (current_time - self.stuck_timer) > STUCK_TIMEOUT:
+                    print(f"[Nav] Bloqué détecté (Lidar statique). Tentative de dégagement.")
+                    self.state = NavState.BRAKING_TO_REVERSE
+                    self.state_timer = current_time
+                    acceleration = 0.0
+                    # On reset le timer pour ne pas re-déclencher immédiatement après
+                    self.stuck_timer = current_time 
             else:
+                # Ça bouge, on reset le timer de blocage
+                self.stuck_timer = current_time
+                self.previous_min_dist = min_dist
+
+            # --- 3. CONDUITE NORMALE ---
+            if self.state == NavState.FORWARD:
                 acceleration, steering = self._logic_follow_the_gap(ranges, closest_idx, min_dist)
                 
                 # Apply smoothing
@@ -117,7 +140,6 @@ class LidarNavigator:
         elif self.state == NavState.BRAKING_TO_REVERSE:
             acceleration = 0.0
             steering = self.last_steering
-            # Reset ramp
             self.current_reverse_power = 0.0
             
             if (current_time - self.state_timer) > self.stop_wait_time:
@@ -125,11 +147,8 @@ class LidarNavigator:
                 self.state_timer = current_time
 
         elif self.state == NavState.REVERSING:
-            # SOFT START RAMP:
-            # On monte progressivement la puissance de 0 à reverse_speed sur 0.5 sec
-            ramp_speed = 0.02 # Incrément par tick (20Hz -> ~0.4/sec)
-            
-            # self.reverse_speed est négatif (ex: -0.22)
+            # SOFT START RAMP
+            ramp_speed = 0.02
             if self.current_reverse_power > self.reverse_speed:
                 self.current_reverse_power -= ramp_speed
                 if self.current_reverse_power < self.reverse_speed:
@@ -137,7 +156,7 @@ class LidarNavigator:
             
             acceleration = self.current_reverse_power
             
-            # Invert steering
+            # Invert steering logic
             steering = -1.0 * np.sign(self.last_gap_center_steering)
             if abs(steering) < 0.1: steering = 0.0
             
@@ -151,6 +170,9 @@ class LidarNavigator:
             if (current_time - self.state_timer) > self.stop_wait_time:
                 self.state = NavState.FORWARD
                 self.last_steering = 0.0
+                # Reset stuck detection variables when restarting forward
+                self.stuck_timer = current_time
+                self.previous_min_dist = min_dist
 
         self.last_steering = steering
         return acceleration, steering
@@ -181,27 +203,19 @@ class LidarNavigator:
         return arr[arr[:, 0].argsort()]
 
     def _apply_safety_bubble(self, ranges: np.ndarray, closest_idx: int, min_dist: float) -> np.ndarray:
-        """
-        Zero out data points within a radius of the closest obstacle.
-        MODIFICATION: Only applies if the obstacle is within +/- 30 degrees (BUBBLE_ENABLE_ANGLE).
-        """
         proc_ranges = ranges.copy()
         if min_dist < self.max_lidar_dist:
             if min_dist < 0.1: min_dist = 0.1
             
             closest_angle = ranges[closest_idx, 0]
             
-            # --- MODIFICATION START ---
-            # On vérifie si l'obstacle le plus proche est "devant" nous.
-            # Si l'obstacle est sur le côté (ex: > 30° ou < -30°), on ne gonfle pas la bulle.
-            # Cela permet de passer près des murs latéraux sans dévier excessivement.
+            # Apply bubble only if obstacle is generally in front (+/- 30 deg)
             if abs(closest_angle) <= BUBBLE_ENABLE_ANGLE:
                 angle_radius_rad = np.arctan(self.robot_bubble_radius / min_dist)
                 angle_radius_deg = np.degrees(angle_radius_rad)
                 
                 mask = np.abs(proc_ranges[:, 0] - closest_angle) < angle_radius_deg
                 proc_ranges[mask, 1] = 0.0
-            # --- MODIFICATION END ---
             
         return proc_ranges
 
