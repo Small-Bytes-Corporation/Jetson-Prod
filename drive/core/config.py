@@ -15,7 +15,7 @@ DEFAULT_SERIAL_PORT = None  # Will be set below
 
 # Autonomous navigation constants
 AUTONOMOUS_MAX_SPEED = 0.05  # Maximum speed for autonomous mode (same as MAX_SPEED by default)
-AUTONOMOUS_MIN_SPEED = 0.00  # Minimum speed for autonomous mode
+AUTONOMOUS_MIN_SPEED = 0.03  # Minimum speed for autonomous mode
 AUTONOMOUS_SAFETY_DISTANCE = 0.4  # Safety bubble radius (meters)
 AUTONOMOUS_FIELD_OF_VIEW = (-90.0, 90.0)  # Field of view in degrees (left, right)
 AUTONOMOUS_LOOKAHEAD_DISTANCE = 300.0  # Preferred forward distance (meters)
