@@ -191,15 +191,17 @@ class ManualDriveApp:
 
     def _handle_exit(self):
         """
-        Check if exit is requested (BACK + START buttons).
+        Check if exit is requested (BACK + START buttons or Y button).
         
         Returns:
             bool: True if exit requested, False otherwise.
         """
         if not self.use_joystick or self.joystick is None:
             return False
+        # Exit on BACK + START or Y button
         return (self.joystick.get_button(Input.BACK) and 
-                self.joystick.get_button(Input.START))
+                self.joystick.get_button(Input.START)) or \
+               self.joystick.get_button(Input.Y)
     
     def _handle_mode_toggle(self):
         """
