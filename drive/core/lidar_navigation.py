@@ -22,7 +22,7 @@ LIDAR_ROTATION_OFFSET = 90.0
 # --- Default Tuning Values ---
 DEFAULT_BUBBLE_RADIUS = 0.4
 DEFAULT_CRITICAL_BUFFER = 0.15 
-DEFAULT_REVERSE_SPEED = -0.22  # Vitesse suffisante pour vaincre le cogging
+DEFAULT_REVERSE_SPEED = -0.03  # Vitesse suffisante pour vaincre le cogging
 DEFAULT_STOP_TIME = 2.0        # Temps d'arrêt pour protéger le VESC
 
 # Angle limite pour la Safety Bubble (seulement devant)
