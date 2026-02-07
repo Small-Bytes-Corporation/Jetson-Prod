@@ -31,7 +31,7 @@ class DataPublisher:
     """
     
     def __init__(self, lidar_controller, camera_controller, socket_server,
-                 debug_camera=False, debug_lidar=False):
+                 debug_camera=False, debug_lidar=False, publish_rate=None):
         """
         Initialize the data publisher.
         
@@ -41,6 +41,7 @@ class DataPublisher:
             socket_server: SocketServer instance.
             debug_camera: If True, print camera data debug messages.
             debug_lidar: If True, print lidar data debug messages.
+            publish_rate: FPS de publication (Hz). Si None, utilise PUBLISH_RATE du config.
         """
         self.lidar_controller = lidar_controller
         self.debug_camera = debug_camera
@@ -50,8 +51,8 @@ class DataPublisher:
         
         self.publish_thread = None
         self.running = False
-        self.publish_rate = PUBLISH_RATE
-        self.sleep_time = 1.0 / PUBLISH_RATE if PUBLISH_RATE > 0 else 0.1
+        self.publish_rate = publish_rate if publish_rate is not None else PUBLISH_RATE
+        self.sleep_time = 1.0 / self.publish_rate if self.publish_rate > 0 else 0.1
         self._frame_number = 0
         self._h264_codec = None
     

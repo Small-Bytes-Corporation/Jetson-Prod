@@ -154,7 +154,8 @@ class CameraStreamApp:
                 camera_controller=self.camera,
                 socket_server=self.udp_server,
                 debug_camera=self.debug,
-                debug_lidar=False
+                debug_lidar=False,
+                publish_rate=self.fps,
             )
             self.data_publisher.start()
             print("[CameraStream] Publisher démarré")

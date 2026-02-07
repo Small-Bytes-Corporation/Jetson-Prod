@@ -22,8 +22,8 @@ AUTONOMOUS_LOOKAHEAD_DISTANCE = 300.0  # Preferred forward distance (meters)
 AUTONOMOUS_GAP_THRESHOLD = 1.0  # Minimum gap size to consider (meters)
 
 # Camera constants
-CAM_WIDTH = 640
-CAM_HEIGHT = 680
+CAM_WIDTH = 504
+CAM_HEIGHT = 504
 CAM_FPS = 15
 CAMERA_STARTUP_DELAY = 0.5  # Delay in seconds after camera initialization before starting DataPublisher (helps on Jetson)
 

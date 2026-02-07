@@ -185,11 +185,10 @@ class UDPServer:
             message_json = json.dumps(payload)
             message_bytes = message_json.encode('utf-8')
 
-            # Send via broadcast
-            # Use determined broadcast address
+            # Send via broadcast + localhost (pour tests sur la même machine)
             broadcast_addr = getattr(self, 'broadcast_addr', self.host)
             self.send_socket.sendto(message_bytes, (broadcast_addr, self.port))
-            
+            self.send_socket.sendto(message_bytes, ('127.0.0.1', self.port))
             return True
         except Exception as e:
             if not self.suppress_debug_prints:
@@ -236,8 +235,9 @@ class UDPServer:
                 start = i * CHUNK_MAX_PAYLOAD_SIZE
                 end = start + CHUNK_MAX_PAYLOAD_SIZE
                 payload = byte_data[start:end]
-                header = header_struct.pack(frame_number, num_chunks, i)
-                self.send_socket.sendto(header + payload, (broadcast_addr, self.port))
+                packet = header_struct.pack(frame_number, num_chunks, i) + payload
+                self.send_socket.sendto(packet, (broadcast_addr, self.port))
+                self.send_socket.sendto(packet, ('127.0.0.1', self.port))
 
             self.last_sensor_data_time = time.time()
             self.last_sensor_data_size = len(byte_data)
