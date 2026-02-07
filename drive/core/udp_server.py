@@ -3,9 +3,11 @@ UDP server for broadcasting camera data.
 """
 
 import json
+import math
 import socket
+import struct
 import time
-from .config import UDP_PORT, UDP_HOST
+from .config import UDP_PORT, UDP_HOST, CHUNK_HEADER_FORMAT, CHUNK_MAX_PAYLOAD_SIZE
 
 try:
     import netifaces
@@ -195,7 +197,7 @@ class UDPServer:
             return False
 
     def emit_sensor_data(self, data):
-        """Emit sensor data via UDP broadcast."""
+        """Emit sensor data via UDP broadcast (legacy JSON format)."""
         if self.running:
             try:
                 if self.debug_payload and not self.suppress_debug_prints:
@@ -209,18 +211,48 @@ class UDPServer:
                 # Estimate data size
                 try:
                     self.last_sensor_data_size = len(json.dumps(data))
-                except:
+                except Exception:
                     self.last_sensor_data_size = None
             except Exception as e:
                 if not self.suppress_debug_prints:
                     print(f"[UDP] Error emitting sensor_data: {e}")
+
+    def send_raw_chunked(self, byte_data: bytes, frame_number: int):
+        """
+        Send raw byte data as chunked UDP packets (MTU-friendly, camera_old style).
+        Each chunk has header (frame_number, num_chunks, chunk_index) + payload.
+        """
+        if not self.running or not self.send_socket or not byte_data:
+            return
+
+        try:
+            num_chunks = max(1, math.ceil(len(byte_data) / CHUNK_MAX_PAYLOAD_SIZE))
+            if self.debug_payload and not self.suppress_debug_prints:
+                print(f"[UDP] [debug] send_raw_chunked: frame {frame_number}, {len(byte_data)} bytes, {num_chunks} chunks")
+            header_struct = struct.Struct(CHUNK_HEADER_FORMAT)
+            broadcast_addr = getattr(self, 'broadcast_addr', self.host)
+
+            for i in range(num_chunks):
+                start = i * CHUNK_MAX_PAYLOAD_SIZE
+                end = start + CHUNK_MAX_PAYLOAD_SIZE
+                payload = byte_data[start:end]
+                header = header_struct.pack(frame_number, num_chunks, i)
+                self.send_socket.sendto(header + payload, (broadcast_addr, self.port))
+
+            self.last_sensor_data_time = time.time()
+            self.last_sensor_data_size = len(byte_data)
+        except Exception as e:
+            if not self.suppress_debug_prints:
+                print(f"[UDP] Error sending raw chunked data: {e}")
 
     def emit_status(self, status):
         """Emit status information via UDP broadcast."""
         if self.running:
             try:
                 if self.debug_payload and not self.suppress_debug_prints:
-                    print(f"[UDP] [debug] emit status:\n{json.dumps(status, indent=2)}")
+                    cam = status.get('camera_connected', False)
+                    clients = status.get('clients_connected', 0)
+                    print(f"[UDP] [debug] emit status: camera_connected={cam}, clients={clients}")
                 
                 self._send_message("status", status)
                 

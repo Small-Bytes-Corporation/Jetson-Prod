@@ -125,9 +125,9 @@ class CameraStreamApp:
             print(f"[CameraStream] Erreur initialisation caméra: {e}")
             return False
         
-        # Vérifier que la caméra peut produire des frames
-        if not self.camera.verify_ready():
-            print("[CameraStream] Avertissement: La caméra n'a pas pu produire de frames")
+        # Vérifier que la caméra est disponible
+        if not self.camera.is_available():
+            print("[CameraStream] Avertissement: La caméra n'est pas disponible")
         
         # Initialiser le serveur UDP
         try:
@@ -142,6 +142,11 @@ class CameraStreamApp:
         except Exception as e:
             print(f"[CameraStream] Erreur initialisation serveur UDP: {e}")
             return False
+        
+        # Vérifier PyAV (requis pour H264)
+        if not getattr(data_publisher, 'HAS_AV', False):
+            print("[CameraStream] ATTENTION: PyAV non installé. Les données caméra ne seront pas envoyées.")
+            print("[CameraStream] Installez avec: pip install av")
         
         # Initialiser le publisher (seulement caméra, pas de lidar)
         try:
@@ -192,10 +197,11 @@ class CameraStreamApp:
                             last_status_time = emission_info.get('last_status_time')
                             data_size = emission_info.get('last_sensor_data_size')
                             
-                            # Afficher les statistiques
+                            # Afficher les statistiques des données envoyées
                             if last_sensor_time is not None:
                                 time_since_last = current_time - last_sensor_time
-                                print(f"[CameraStream] [debug] Dernier envoi sensor_data: il y a {time_since_last:.2f}s, taille: {data_size} bytes" if data_size else f"[CameraStream] [debug] Dernier envoi sensor_data: il y a {time_since_last:.2f}s")
+                                size_info = f", {data_size} bytes H264" if data_size else ""
+                                print(f"[CameraStream] [debug] Dernier envoi caméra (H264 chunké): il y a {time_since_last:.2f}s{size_info}")
                             
                             # Afficher les informations de la caméra
                             if self.camera is not None and self.camera.is_available():

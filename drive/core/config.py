@@ -124,6 +124,13 @@ SOCKETIO_CORS_ORIGINS = '*'  # Not used with UDP
 # Data publishing
 PUBLISH_RATE = 10  # Hz (fréquence d'envoi des données)
 
+# Chunked UDP protocol (MTU-friendly, matches camera_old style)
+CHUNK_HEADER_FORMAT = "!IHH"  # frame_number (I), num_chunks (H), chunk_index (H)
+CHUNK_MAX_PAYLOAD_SIZE = 1400
+
+# H264 encoding (for DataPublisher)
+H264_BITRATE = 500000
+
 # Loop timing
 LOOP_SLEEP_TIME = 0.05
 

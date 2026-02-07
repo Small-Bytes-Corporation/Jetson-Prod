@@ -17,3 +17,4 @@ psutil>=5.9.4
 netifaces>=0.11.0
 pyvesc @ git+https://github.com/LiamBindle/pyvesc.git@d2f2076afe91dafa920a38a437528819697e05e3
 rich>=10.0.0,<11.0.0
+av>=10.0.0  # PyAV for H264 encoding (DataPublisher)

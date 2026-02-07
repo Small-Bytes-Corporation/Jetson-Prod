@@ -16,30 +16,15 @@ Les clients doivent écouter sur ce port pour recevoir les messages broadcast.
 
 ### Messages émis par le serveur
 
-#### `sensor_data`
+#### Données caméra : paquets chunkés (binaire)
 
-Données de la caméra envoyées périodiquement. Le bloc peut être `null` si la source n'est pas disponible.
+Les données caméra sont envoyées en **paquets UDP chunkés** (format binaire, MTU-friendly). Chaque frame H264 est découpée en chunks de 1400 octets maximum.
 
-**Format:**
-```json
-{
-  "type": "sensor_data",
-  "timestamp": 1234567890.123,
-  "camera": {
-    "frame": "base64_encoded_jpeg_image",
-    "width": 320,
-    "height": 180,
-    "format": "jpeg"
-  }
-}
-```
+**Format par paquet :**
+- **En-tête** : `struct.Struct("!IHH")` = `frame_number` (4 octets), `num_chunks` (2 octets), `chunk_index` (2 octets)
+- **Payload** : jusqu'à 1400 octets de données H264
 
-**Notes:**
-- `type`: Toujours `"sensor_data"`
-- `timestamp`: Timestamp Unix en secondes (float)
-- `camera.frame`: Image JPEG encodée en base64
-- `camera.width/height`: Dimensions de l'image
-- `camera.format`: Format de l'image ("jpeg")
+Le client doit réassembler les chunks par `frame_number` puis décoder le H264 (ex. PyAV).
 
 #### `status`
 
@@ -81,63 +66,57 @@ Le serveur considère un client comme déconnecté s'il n'a pas reçu de heartbe
 
 ```python
 import socket
+import struct
 import json
 import time
 import threading
-import base64
 
 # Configuration
 UDP_PORT = 3000
 BROADCAST_ADDR = '255.255.255.255'
+CHUNK_HEADER_FORMAT = "!IHH"
+CHUNK_HEADER_SIZE = struct.calcsize(CHUNK_HEADER_FORMAT)
+frame_buffers = {}  # frame_number -> {total_chunks, chunks: {}}
 
-# Créer socket UDP pour recevoir
 recv_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
 recv_sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
 recv_sock.bind(('', UDP_PORT))
 
-# Socket pour envoyer les heartbeats
 send_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
 send_sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
 
 def send_heartbeat():
-    """Envoyer un heartbeat toutes les secondes"""
     while True:
-        heartbeat = {
-            "type": "heartbeat",
-            "timestamp": time.time()
-        }
-        message = json.dumps(heartbeat).encode('utf-8')
-        send_sock.sendto(message, (BROADCAST_ADDR, UDP_PORT))
+        send_sock.sendto(json.dumps({"type": "heartbeat", "timestamp": time.time()}).encode('utf-8'),
+                         (BROADCAST_ADDR, UDP_PORT))
         time.sleep(1.0)
 
-# Démarrer le thread heartbeat
-heartbeat_thread = threading.Thread(target=send_heartbeat, daemon=True)
-heartbeat_thread.start()
+threading.Thread(target=send_heartbeat, daemon=True).start()
 
-# Écouter les messages
 print("Écoute des messages UDP sur le port", UDP_PORT)
 while True:
-    data, addr = recv_sock.recvfrom(65507)  # Taille max UDP
+    data, addr = recv_sock.recvfrom(65507)
     try:
-        message = json.loads(data.decode('utf-8'))
-        msg_type = message.get('type')
-        
-        if msg_type == 'sensor_data':
-            print(f"Timestamp: {message.get('timestamp')}")
-            
-            # Traiter les données caméra
-            if message.get('camera') and message['camera'].get('frame'):
-                frame_data = base64.b64decode(message['camera']['frame'])
-                # Sauvegarder ou traiter l'image
-                with open('frame.jpg', 'wb') as f:
-                    f.write(frame_data)
-                print("Image sauvegardée")
-        
-        elif msg_type == 'status':
-            print(f"Status: camera={message.get('camera_connected')}, clients={message.get('clients_connected')}")
-    
-    except (json.JSONDecodeError, UnicodeDecodeError) as e:
-        print(f"Erreur de décodage: {e}")
+        if data[:1] == b'{':  # JSON (status)
+            message = json.loads(data.decode('utf-8'))
+            if message.get('type') == 'status':
+                print(f"Status: camera={message.get('camera_connected')}")
+        elif len(data) >= CHUNK_HEADER_SIZE:  # Paquet chunké caméra
+            frame_num, total_chunks, chunk_idx = struct.unpack(CHUNK_HEADER_FORMAT, data[:CHUNK_HEADER_SIZE])
+            payload = data[CHUNK_HEADER_SIZE:]
+            if frame_num not in frame_buffers:
+                frame_buffers[frame_num] = {'total_chunks': total_chunks, 'chunks': {}}
+            frame_buffers[frame_num]['chunks'][chunk_idx] = payload
+            buf = frame_buffers[frame_num]
+            if len(buf['chunks']) == buf['total_chunks']:
+                full_frame = b''.join(buf['chunks'][i] for i in range(buf['total_chunks']))
+                del frame_buffers[frame_num]
+                # Décoder H264 avec PyAV, ou sauvegarder
+                with open(f'frame_{frame_num}.h264', 'wb') as f:
+                    f.write(full_frame)
+                print(f"Frame {frame_num} complète: {len(full_frame)} octets")
+    except (json.JSONDecodeError, UnicodeDecodeError, struct.error) as e:
+        print(f"Erreur: {e}")
 ```
 
 ## Exemple d'utilisation (JavaScript/Node.js)
@@ -148,44 +127,46 @@ const client = dgram.createSocket('udp4');
 
 const UDP_PORT = 3000;
 const BROADCAST_ADDR = '255.255.255.255';
+const CHUNK_HEADER_SIZE = 8;  // !IHH = 4 + 2 + 2 octets
+const frameBuffers = {};  // frame_number -> {total_chunks, chunks: {}}
 
-// Écouter les messages
 client.bind(UDP_PORT, () => {
     console.log(`Écoute des messages UDP sur le port ${UDP_PORT}`);
     client.setBroadcast(true);
 });
 
-// Envoyer des heartbeats périodiquement
 setInterval(() => {
-    const heartbeat = JSON.stringify({
-        type: 'heartbeat',
-        timestamp: Date.now() / 1000
-    });
-    client.send(heartbeat, UDP_PORT, BROADCAST_ADDR, (err) => {
-        if (err) console.error('Erreur envoi heartbeat:', err);
-    });
-}, 1000); // Toutes les secondes
+    client.send(JSON.stringify({ type: 'heartbeat', timestamp: Date.now() / 1000 }),
+               UDP_PORT, BROADCAST_ADDR);
+}, 1000);
 
-// Recevoir les messages
 client.on('message', (msg, rinfo) => {
     try {
-        const message = JSON.parse(msg.toString());
-        const msgType = message.type;
-        
-        if (msgType === 'sensor_data') {
-            console.log('Timestamp:', message.timestamp);
-            
-            // Traiter les données caméra
-            if (message.camera && message.camera.frame) {
-                const imageData = `data:image/${message.camera.format};base64,${message.camera.frame}`;
-                // Afficher l'image dans le navigateur ou la sauvegarder
-                console.log('Image reçue:', message.camera.width, 'x', message.camera.height);
+        if (msg[0] === 0x7B) {  // '{' = JSON (status)
+            const message = JSON.parse(msg.toString());
+            if (message.type === 'status') {
+                console.log(`Status: camera=${message.camera_connected}`);
             }
-        } else if (msgType === 'status') {
-            console.log(`Status: camera=${message.camera_connected}, clients=${message.clients_connected}`);
+        } else if (msg.length >= CHUNK_HEADER_SIZE) {  // Paquet chunké caméra
+            const frameNum = msg.readUInt32BE(0);
+            const totalChunks = msg.readUInt16BE(4);
+            const chunkIdx = msg.readUInt16BE(6);
+            const payload = msg.slice(CHUNK_HEADER_SIZE);
+            if (!frameBuffers[frameNum]) {
+                frameBuffers[frameNum] = { totalChunks, chunks: {} };
+            }
+            frameBuffers[frameNum].chunks[chunkIdx] = payload;
+            const buf = frameBuffers[frameNum];
+            if (Object.keys(buf.chunks).length === buf.totalChunks) {
+                const fullFrame = Buffer.concat(
+                    [...Array(buf.totalChunks)].map((_, i) => buf.chunks[i])
+                );
+                delete frameBuffers[frameNum];
+                console.log(`Frame ${frameNum} complète: ${fullFrame.length} octets H264`);
+            }
         }
     } catch (e) {
-        console.error('Erreur de décodage:', e);
+        console.error('Erreur:', e);
     }
 });
 ```
@@ -223,7 +204,7 @@ UDP_HEARTBEAT_TIMEOUT = 3.0  # secondes
 
 ## Notes importantes
 
-- Les images caméra sont encodées en JPEG avec une qualité de 85% pour réduire la taille
+- Les images caméra sont encodées en H264 (PyAV) et envoyées en paquets chunkés de 1400 octets (MTU-friendly)
 - La caméra doit être activée avec `--camera` pour recevoir des données caméra
 - Les messages sont envoyés en UDP broadcast (255.255.255.255)
 - Les clients doivent envoyer des heartbeats régulièrement pour être comptés comme connectés
