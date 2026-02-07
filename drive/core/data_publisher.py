@@ -1,11 +1,13 @@
 """
 Data publisher for collecting and broadcasting sensor data.
-Uses H264 encoding and chunked UDP packets (camera_old style).
+Uses H264 encoding (PyAV) or JPEG fallback (OpenCV) with chunked UDP packets.
 """
 
 import time
 import threading
 from fractions import Fraction
+
+import cv2
 
 from .config import (
     PUBLISH_RATE,
@@ -77,7 +79,7 @@ class DataPublisher:
     def _publish_loop(self):
         """Main publishing loop running in a separate thread."""
         if not HAS_AV:
-            print("[DataPublisher] PyAV not installed. Run: pip install av. Camera streaming disabled.")
+            print("[DataPublisher] PyAV non installé. Utilisation du fallback JPEG (OpenCV).")
         
         while self.running:
             try:
@@ -122,11 +124,9 @@ class DataPublisher:
     
     def _publish_camera_chunked(self):
         """
-        Get frame from camera, encode as H264, send as chunked UDP packets.
+        Get frame from camera, encode (H264 or JPEG), send as chunked UDP packets.
         """
         if self.camera_controller is None or not self.camera_controller.is_available():
-            return
-        if not HAS_AV:
             return
         
         frame = self.camera_controller.get_frame()
@@ -134,23 +134,25 @@ class DataPublisher:
             return
         
         try:
-            height, width = frame.shape[:2]
-            self._ensure_h264_codec(width, height)
-            if self._h264_codec is None:
-                return
-            
-            av_frame = av.VideoFrame.from_ndarray(frame, format='bgr24')
-            packet_bytes_list = []
-            for packet in self._h264_codec.encode(av_frame):
-                packet_bytes_list.append(bytes(packet))
-            
-            if not packet_bytes_list:
-                return
-            
-            frame_bytes = b''.join(packet_bytes_list)
-            self.socket_server.send_raw_chunked(frame_bytes, self._frame_number)
-            self._frame_number += 1
-            
+            if HAS_AV:
+                height, width = frame.shape[:2]
+                self._ensure_h264_codec(width, height)
+                if self._h264_codec is not None:
+                    av_frame = av.VideoFrame.from_ndarray(frame, format='bgr24')
+                    packet_bytes_list = []
+                    for packet in self._h264_codec.encode(av_frame):
+                        packet_bytes_list.append(bytes(packet))
+                    if packet_bytes_list:
+                        frame_bytes = b''.join(packet_bytes_list)
+                        self.socket_server.send_raw_chunked(frame_bytes, self._frame_number)
+                        self._frame_number += 1
+            else:
+                # Fallback JPEG (OpenCV) - no PyAV required
+                _, buffer = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 85])
+                if buffer is not None:
+                    frame_bytes = buffer.tobytes()
+                    self.socket_server.send_raw_chunked(frame_bytes, self._frame_number)
+                    self._frame_number += 1
         except Exception as e:
             if self.debug_camera:
                 print(f"[DataPublisher] Error encoding/sending camera frame: {e}")

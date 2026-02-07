@@ -143,10 +143,9 @@ class CameraStreamApp:
             print(f"[CameraStream] Erreur initialisation serveur UDP: {e}")
             return False
         
-        # Vérifier PyAV (requis pour H264)
+        # Info PyAV (H264) vs fallback JPEG
         if not getattr(data_publisher, 'HAS_AV', False):
-            print("[CameraStream] ATTENTION: PyAV non installé. Les données caméra ne seront pas envoyées.")
-            print("[CameraStream] Installez avec: pip install av")
+            print("[CameraStream] PyAV non installé - utilisation du fallback JPEG (OpenCV)")
         
         # Initialiser le publisher (seulement caméra, pas de lidar)
         try:
